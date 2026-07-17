@@ -5,6 +5,8 @@ cmake-build-*/
 bin/
 lib/
 
+tests/nodejs/
+
 # Third party (auto-cloned by CMake)
 third_party/
 
