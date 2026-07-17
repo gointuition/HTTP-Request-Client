@@ -16,19 +16,19 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                 Language Bindings                │
-│     Node.js (N-API)  │  Python (cffi)  │  Java (JNI)  │
+│                 Language Bindings               │
+│     Node.js (N-API) │ Python (cffi) │ Java (JNI)│
 ├─────────────────────────────────────────────────┤
-│              libhttp2client (shared lib)          │
+│             libhttp2client (shared lib)         │
 ├─────────────────────────────────────────────────┤
-│  Http2Client → Basket → Session → RequestHandler │
-│                         → ResponseHandler        │
-│                         → SocketHandler          │
+│ Http2Client → Basket → Session → RequestHandler │
+│                        → ResponseHandler        │
+│                        → SocketHandler          │
 ├─────────────────────────────────────────────────┤
-│  SSLHandler (BoringSSL)  │  CompressHandler      │
-│  BrowserHandler (Chrome) │  UrlParser / File      │
+│ SSLHandler (BoringSSL) │ CompressHandler        │
+│ BrowserHandler (Chrome)│ UrlParser / File       │
 ├─────────────────────────────────────────────────┤
-│  BoringSSL  │  Brotli  │  Zstd  │  Jansson  │  zlib │
+│ BoringSSL │ Brotli │ Zstd │ Jansson │ zlib      │
 └─────────────────────────────────────────────────┘
 ```
 
