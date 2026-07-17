@@ -1,4 +1,4 @@
-# HTTP/2 Client
+# HTTP Request Client
 
 A high-performance HTTP/2 client library written in C, with TLS 1.3 session resumption, HPACK header compression, and Browser-like TLS fingerprinting.
 
