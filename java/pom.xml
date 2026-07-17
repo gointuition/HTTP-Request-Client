@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  pom.xml - Maven build configuration for HTTP/2 Java binding.
+  Mirrors nodejs/package.json and python/setup.py.
+
+  Build:  mvn compile
+  Test:   mvn exec:java -Dexec.mainClass=Test
+  Package: mvn package
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.intuition</groupId>
+    <artifactId>http2-client</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>HTTP/2 Client</name>
+    <description>High-performance HTTP/2 client with native C implementation</description>
+
+    <licenses>
+        <license>
+            <name>Apache-2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+        <project.build.sourceDirectory>.</project.build.sourceDirectory>
+    </properties>
+
+    <dependencies>
+        <!-- org.json: JSON parsing (Java has no built-in JSON) -->
+        <dependency>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>20240303</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <sourceDirectory>.</sourceDirectory>
+        <outputDirectory>build</outputDirectory>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <mainClass>Test</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

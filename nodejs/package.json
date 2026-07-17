@@ -1,0 +1,29 @@
+{
+  "name": "@http2/client",
+  "version": "1.0.0",
+  "description": "High-performance HTTP/2 client with native C implementation",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "install": "CFLAGS='' CXXFLAGS='' CPPFLAGS='' LDFLAGS='' node-gyp rebuild",
+    "build": "CFLAGS='' CXXFLAGS='' CPPFLAGS='' LDFLAGS='' node-gyp rebuild",
+    "clean": "node-gyp clean",
+    "test": "node test.js",
+    "benchmark": "node benchmark.js"
+  },
+  "keywords": [
+    "http2",
+    "client",
+    "native",
+    "performance"
+  ],
+  "author": "Intuition",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "node-gyp": "^10.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "gypfile": true
+}

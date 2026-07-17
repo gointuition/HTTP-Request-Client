@@ -1,0 +1,36 @@
+{
+  "method": "POST",
+  "url": "https://httpbin.org/post",
+  "connectTimeoutInMilliseconds": 3000,
+  "responseReadingTimeoutInMilliseconds": 30000,
+  "decompress": 15,
+  "log": 1,
+  "headers": {
+    "host": "httpbin.org",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"145\", \"Chromium\";v=\"145\"",
+    "content-type": "application/json",
+    "sec-ch-ua-mobile": "?0",
+    "accept": "*/*",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "script",
+    "accept-encoding": "gzip, deflate, br, zstd",
+    "accept-language": "en-US,en;q=0.9",
+    "priority": "u=1",
+    "content-length": "27"
+  },
+  "payload": {
+    "name": "test",
+    "value": 123
+  },
+  "proxy": {
+    "scheme": "https",
+    "host": "127.0.0.1",
+    "port": "24801",
+    "authorization": "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
+  },
+  "session": {
+    "expirationInMilliseconds": 300000
+  }
+}
