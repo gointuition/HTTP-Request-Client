@@ -5,8 +5,18 @@
 #ifndef REQUEST_H
 #define REQUEST_H
 
+#ifdef __cplusplus
+    #include <atomic>
+    typedef std::atomic<unsigned int> atomic_uint;
+#else
+    #include <stdatomic.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
-#include <stdatomic.h>
 
 #include "UrlParser.h"
 #include "Error.h"
@@ -129,5 +139,9 @@ void freeBasket(Basket *basket);
 int basketToString(Basket *basket, char *basketJSONString, size_t basketStrLen);
 
 const char * getUserAgent(Basket *basket);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif //REQUEST_H
