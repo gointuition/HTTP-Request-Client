@@ -274,9 +274,9 @@ static char* getAddressIPPort(const struct sockaddr *sa) {
         port = ntohs(ipv6 -> sin6_port);
 
         // "IPv6:["(6) + IP(39) + "]:"(2) + port(5) + null(1) = 53
-        ip_port = malloc(53);
+        ip_port = malloc(64);
         if (ip_port == NULL) { return NULL; }
-        snprintf(ip_port, 53, "IPV6:[%s]:%d", ip, port);
+        snprintf(ip_port, sizeof(ip_port), "IPV6:[%s]:%d", ip, port);
     } else {
         return strdup("unknown address family");
     }
