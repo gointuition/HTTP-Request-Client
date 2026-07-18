@@ -41,7 +41,7 @@ Http2Client http2Client = {
     .initialSessionRecvWindow = 15663105 + 65535
 };
 
-HashTable_InetAddress *tableInetAddress = NULL;
+//HashTable_InetAddress *tableInetAddress = NULL;
 
 static void sendRequest(Basket *basket);
 
@@ -70,27 +70,27 @@ void cleanupEnv(void) {
     // tableInetAddress = NULL;
 }
 
-int connectTo(const char *hostname, const char *port) {
-    InetAddress *inetAddress = get_InetAddress(tableInetAddress, hostname);
-    if (inetAddress == NULL) {
-        printf("Not from cache\n"); // TODO
-        inetAddress = getInetAddressBy(hostname, port);
-        if (inetAddress != NULL) {
-            put_InetAddress(tableInetAddress, hostname, inetAddress, sizeof(InetAddress), 86400);
-        }
-    }
-    if (inetAddress == NULL) {
-        return -1;
-    }
-    // [2001:0db8:85a3:0000:0000:8a2e:0370:7334]:443
-    printf("hostname: %s, port: %s, address: %s, version: %s\n", inetAddress -> hostname, inetAddress -> port, inetAddress -> address, inetAddress -> version); // TODO
-    
-    
-    
-    freeInetAddress(inetAddress);
-    inetAddress = NULL;
-    return 1;
-}
+//int connectTo(const char *hostname, const char *port) {
+//    InetAddress *inetAddress = get_InetAddress(tableInetAddress, hostname);
+//    if (inetAddress == NULL) {
+//        printf("Not from cache\n"); // TODO
+//        inetAddress = getInetAddressBy(hostname, port);
+//        if (inetAddress != NULL) {
+//            put_InetAddress(tableInetAddress, hostname, inetAddress, sizeof(InetAddress), 86400);
+//        }
+//    }
+//    if (inetAddress == NULL) {
+//        return -1;
+//    }
+//    // [2001:0db8:85a3:0000:0000:8a2e:0370:7334]:443
+//    printf("hostname: %s, port: %s, address: %s, version: %s\n", inetAddress -> hostname, inetAddress -> port, inetAddress -> address, inetAddress -> version); // TODO
+//
+//
+//
+//    freeInetAddress(inetAddress);
+//    inetAddress = NULL;
+//    return 1;
+//}
 
 int handleRequest(const char *requestJSONString, char *basketJSONString, size_t basketStrLen) {
     // 1. prepare request

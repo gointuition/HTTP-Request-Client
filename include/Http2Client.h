@@ -15,10 +15,10 @@ extern "C" {
 #endif
 
 //#include "ClientConnector.h"
-#include "temp/InetAddress.h"
+//#include "temp/InetAddress.h"
 #include "Basket.h"
 
-#include "temp/CacheInetAddress.h"
+//#include "temp/CacheInetAddress.h"
 
 enum State {
     STARTING
