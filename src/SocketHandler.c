@@ -265,9 +265,9 @@ static char* getAddressIPPort(const struct sockaddr *sa) {
         port = ntohs(ipv4 -> sin_port);
 
         // "IPV4:"(5) + IP(15) + ":"(1) + PORT(5) + null(1) =  26
-        ip_port = malloc(26);
+        ip_port = malloc(64);
         if (ip_port == NULL) { return NULL; }
-        snprintf(ip_port, 26, "IPV4:%s:%d", ip, port);
+        snprintf(ip_port, 64, "IPV4:%s:%d", ip, port);
     } else if (sa -> sa_family == AF_INET6) {
         struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *) sa;
         inet_ntop(AF_INET6, &(ipv6 -> sin6_addr), ip, sizeof(ip));
