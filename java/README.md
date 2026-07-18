@@ -1,8 +1,8 @@
-# Java 绑定编译与执行指南
+# Java Binding — Build & Run Guide
 
-## 前置条件
+## Prerequisites
 
-### 1. 构建 C 共享库
+### 1. Build the C shared library
 
 ```bash
 cd /Users/wangbingjie/Documents/Clion/Http2
@@ -10,106 +10,68 @@ mkdir -p build && cd build
 cmake .. && make
 ```
 
-产物：`lib/shared/libhttp2client.dylib`
+Output: `lib/shared/libhttp2client.dylib`
 
-### 2. 安装 OpenJDK
+### 2. Install OpenJDK
 
 ```bash
 brew install openjdk
-# 添加到 PATH（写入 ~/.zshrc 永久生效）
+# Add to PATH (append to ~/.zshrc to persist)
 echo 'export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
-# 验证
+# Verify
 java -version
 ```
 
-## 一键构建（编译 + 打包 + 测试）
+### 3. Install Maven
+
+```bash
+brew install maven
+# Verify
+mvn -version
+```
+
+## One-shot build (compile + package + test)
 
 ```bash
 cd java
 bash build.sh
 ```
 
-构建完成后生成 fat JAR：`build/http2-client-1.0.0.jar`
+`build.sh` only performs environment checks (C library, Java, Maven), invokes
+`mvn clean package`, then runs the test. All actual build steps live in `pom.xml`.
+The build produces the fat JAR: `build/http2-client-1.0.0.jar`
 
-## 手动分步构建
-
-### Step 1: 编译 Java 源码 + 生成 JNI 头文件
-
-```bash
-cd java
-mkdir -p build
-javac -cp "lib/json-20240303.jar" -h . -d build *.java
-```
-
-生成 `Http2Client.h`（JNI 头文件），需重命名避免与项目头文件冲突：
-
-```bash
-mv Http2Client.h Http2Client_jni.h
-```
-
-### Step 2: 编译 JNI C 桥接库
-
-```bash
-JAVA_HOME="/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home"
-
-gcc -shared -fPIC \
-    -I"$JAVA_HOME/include" \
-    -I"$JAVA_HOME/include/darwin" \
-    -I. \
-    -L../lib/shared \
-    -lhttp2client \
-    -Wl,-rpath,@loader_path \
-    -o build/libhttp2jni.dylib \
-    Http2Client.c
-```
-
-产物：`build/libhttp2jni.dylib`（链接 `libhttp2client.dylib`）
-
-> rpath 设为 `@loader_path`，因为 fat JAR 运行时两个 .dylib 被提取到同一临时目录。
-
-### Step 3: 打包 Fat JAR
-
-```bash
-mkdir -p build/stage/native
-cd build/stage
-
-# 复制 class 文件
-cp ../build/*.class .
-
-# 解压 json 依赖
-jar xf ../../lib/json-20240303.jar
-rm -rf META-INF
-
-# 复制 native 库到 native/ 目录
-cp ../../build/libhttp2jni.dylib native/
-cp ../../../lib/shared/libhttp2client.dylib native/
-
-# 创建 manifest
-cat > MANIFEST.MF << 'EOF'
-Manifest-Version: 1.0
-Implementation-Version: 1.0.0
-Implementation-Title: HTTP/2 Client
-EOF
-
-# 打包
-jar cfm ../http2-client-1.0.0.jar MANIFEST.MF *.class org/ native/
-```
-
-产物：`build/http2-client-1.0.0.jar`（1.6 MB，自包含）
-
-### Step 4: 运行测试
+## Using Maven directly
 
 ```bash
 cd java
-java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
+
+# Full build (compile Java + generate JNI header + gcc bridge + package fat JAR)
+mvn clean package
+
+# Run a class
+mvn exec:java -Dexec.mainClass=Test
+mvn exec:java -Dexec.mainClass=Example
 ```
 
-> 使用 classpath 模式运行，需要 `--enable-native-access=ALL-UNNAMED` 参数启用原生访问。
+## Maven build flow (pom.xml)
 
-## 使用方式
+`mvn clean package` runs the following plugins in order:
 
-### 从 Fat JAR 运行（推荐）
+| Phase | Plugin | Purpose |
+|-------|--------|---------|
+| `compile` | `maven-compiler-plugin` | Compile `*.java` and generate the JNI header via `javac -h` into `build/generated-jni/` |
+| `process-classes` | `maven-antrun-plugin` | Copy the generated header to `Http2Client_jni.h`; compile the JNI bridge with `gcc`; copy native libs into `build/classes/native/` |
+| `package` | `maven-shade-plugin` | Build the fat JAR (classes + `org.json` dependency + `native/` libraries) |
+
+- `org.json` is resolved as a standard Maven dependency (no manual `lib/*.jar` needed).
+- OS-specific settings (`.dylib`/`.so`, include dir, rpath) are selected automatically by `<profiles>` for macOS / Linux.
+- The JNI bridge rpath is set to `@loader_path` (macOS) because both `.dylib` files are extracted to the same temp directory at runtime.
+
+## Usage
+
+### Run from the fat JAR (recommended)
 
 ```bash
 cd java
@@ -117,69 +79,66 @@ java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
 java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Example
 ```
 
-### 开发模式（从 build 目录运行）
+> Running in classpath mode requires `--enable-native-access=ALL-UNNAMED` to enable native access.
 
-```bash
-cd java
-java --enable-native-access=ALL-UNNAMED -cp "build:lib/json-20240303.jar" Test
-```
+### Calling from Java code
 
-### Java 代码调用
+`Http2Client` lives in the unnamed module (no package). On the same classpath it can be used directly, without an `import`:
 
 ```java
-import Http2Client;
-
 Http2Client.init();
 String result = Http2Client.request(requestJsonString);
 Http2Client.cleanup();
 ```
 
-## Fat JAR 结构
+## Fat JAR layout
 
 ```
-http2-client-1.0.0.jar  (1.6 MB)
+http2-client-1.0.0.jar
 ├── Http2Client.class
 ├── Example.class
 ├── Test.class
-├── org/json/*.class        # JSON 依赖（已内联）
+├── org/json/*.class        # JSON dependency (inlined)
 └── native/
-    ├── libhttp2client.dylib  # C 核心库
-    └── libhttp2jni.dylib     # JNI 桥接库
+    ├── libhttp2client.dylib  # C core library
+    └── libhttp2jni.dylib     # JNI bridge library
 ```
 
-运行时 `Http2Client.java` 自动从 JAR 内 `/native/` 提取 .dylib 到临时目录
-（`$TMPDIR/http2client-native/`），通过 `System.load()` 加载。
+At runtime `Http2Client.java` automatically extracts the `.dylib` files from
+`/native/` inside the JAR to a temp directory (`$TMPDIR/http2client-native/`)
+and loads them via `System.load()`.
 
-## 构建产物清单
+## Build artifacts
 
 ```
 java/build/
-├── http2-client-1.0.0.jar  # Fat JAR（最终产物）
-├── Http2Client.class
-├── Example.class
-├── Test.class
-├── libhttp2jni.dylib       # JNI 桥接库
-└── stage/                  # 打包临时目录
+├── http2-client-1.0.0.jar          # Fat JAR (final artifact, shade-packaged)
+├── original-http2-client-1.0.0.jar # Original JAR before shading
+├── generated-jni/Http2Client.h     # JNI header generated by javac -h
+└── classes/                        # Compilation output
+    ├── *.class
+    └── native/                     # gcc output + copied C library
 ```
 
-## 依赖
+## Dependencies
 
-| 依赖 | 版本 | 位置 | 说明 |
-|------|------|------|------|
-| `org.json` | 20240303 | `lib/json-20240303.jar` | JSON 解析（Java 无内置 JSON），已内联进 fat JAR |
-| OpenJDK | 26+ | 系统安装 | 提供 `java`/`javac`/`jni.h` |
+| Dependency | Version | Location | Notes |
+|------------|---------|----------|-------|
+| `org.json` | 20240303 | Maven dependency | JSON parsing (Java has no built-in JSON), inlined into the fat JAR |
+| OpenJDK | 26+ | System install | Provides `java`/`javac`/`jni.h` |
+| Maven | 3.9+ | System install | Drives the build via `pom.xml` |
 
-## 文件说明
+## File overview
 
-| 文件 | 说明 |
-|------|------|
-| `Http2Client.java` | 核心绑定类，声明 `native` 方法，`System.load` 加载库（支持从 JAR 和文件系统加载） |
-| `Http2Client.c` | JNI C 桥接，调用 C 库的 `initialiseEnv`/`handleRequest`/`cleanupEnv` |
-| `Http2Client_jni.h` | `javac -h` 生成的 JNI 头文件 |
-| `Example.java` | 示例（GET / POST / 自定义超时） |
-| `Test.java` | 测试 |
-| `build.sh` | 自动化构建脚本（编译 → JNI → 打包 → 测试） |
-| `pom.xml` | Maven 配置 |
+| File | Description |
+|------|-------------|
+| `Http2Client.java` | Core binding class; declares `native` methods and loads libraries via `System.load` (from JAR or filesystem) |
+| `Http2Client.c` | JNI C bridge; calls the C library's `initialiseEnv`/`handleRequest`/`cleanupEnv` |
+| `Http2Client_jni.h` | JNI header generated by `javac -h` |
+| `Example.java` | Example (GET / POST / custom timeout) |
+| `Test.java` | Test |
+| `build.sh` | Build wrapper (checks env, runs `mvn clean package`, runs test) |
+| `pom.xml` | Maven configuration that drives the whole build |
 
 ## License
 

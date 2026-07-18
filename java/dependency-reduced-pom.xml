@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.intuition</groupId>
+  <artifactId>http2-client</artifactId>
+  <name>HTTP/2 Client</name>
+  <version>1.0.0</version>
+  <description>High-performance HTTP/2 client with native C implementation</description>
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+    </license>
+  </licenses>
+  <build>
+    <sourceDirectory>${project.basedir}</sourceDirectory>
+    <outputDirectory>${project.basedir}/build/classes</outputDirectory>
+    <directory>${project.basedir}/build</directory>
+    <finalName>http2-client-${project.version}</finalName>
+    <plugins>
+      <plugin>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.11.0</version>
+        <configuration>
+          <compilerArgs>
+            <arg>-h</arg>
+            <arg>${jni.header.dir}</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>compile-jni</id>
+            <phase>process-classes</phase>
+            <goals>
+              <goal>run</goal>
+            </goals>
+            <configuration>
+              <target>
+                <copy />
+                <mkdir />
+                <exec>
+                  <arg />
+                  <arg />
+                  <arg />
+                  <arg />
+                  <arg />
+                  <arg />
+                  <arg />
+                  <arg />
+                  <arg />
+                  <arg />
+                  <arg />
+                </exec>
+                <copy />
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <transformers>
+                <transformer>
+                  <manifestEntries>
+                    <Implementation-Title>HTTP/2 Client</Implementation-Title>
+                    <Implementation-Version>${project.version}</Implementation-Version>
+                  </manifestEntries>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.1.0</version>
+        <configuration>
+          <mainClass>Test</mainClass>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+  <profiles>
+    <profile>
+      <id>macos</id>
+      <properties>
+        <jni.rpath>-Wl,-rpath,@loader_path</jni.rpath>
+        <jni.os.include>darwin</jni.os.include>
+        <client.lib.name>libhttp2client.dylib</client.lib.name>
+        <jni.lib.name>libhttp2jni.dylib</jni.lib.name>
+      </properties>
+    </profile>
+    <profile>
+      <id>linux</id>
+      <properties>
+        <jni.rpath>-Wl,-rpath,$ORIGIN</jni.rpath>
+        <jni.os.include>linux</jni.os.include>
+        <client.lib.name>libhttp2client.so</client.lib.name>
+        <jni.lib.name>libhttp2jni.so</jni.lib.name>
+      </properties>
+    </profile>
+  </profiles>
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <jni.header.dir>${project.build.directory}/generated-jni</jni.header.dir>
+    <maven.compiler.target>8</maven.compiler.target>
+    <native.lib.dir>${project.basedir}/../lib/shared</native.lib.dir>
+    <maven.compiler.source>8</maven.compiler.source>
+  </properties>
+</project>

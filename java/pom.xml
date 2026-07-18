@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  pom.xml - Maven build configuration for HTTP/2 Java binding.
+  pom.xml - Maven build configuration for HTTP/2 Java binding (JNI).
   Mirrors nodejs/package.json and python/setup.py.
 
-  Build:  mvn compile
-  Test:   mvn exec:java -Dexec.mainClass=Test
-  Package: mvn package
+  This POM drives the WHOLE build (invoked by build.sh):
+    1. maven-compiler-plugin  : compile *.java + generate JNI header (javac -h)
+    2. maven-antrun-plugin     : compile JNI C bridge (gcc) + stage native libs
+    3. maven-shade-plugin      : package fat JAR (classes + org.json + native/)
+
+  Common commands:
+    mvn clean package                    # build everything -> build/http2-client-1.0.0.jar
+    mvn exec:java -Dexec.mainClass=Test  # run a class
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -31,7 +36,11 @@
     <properties>
         <maven.compiler.source>8</maven.compiler.source>
         <maven.compiler.target>8</maven.compiler.target>
-        <project.build.sourceDirectory>.</project.build.sourceDirectory>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Directory holding the prebuilt native C library (libhttp2client) -->
+        <native.lib.dir>${project.basedir}/../lib/shared</native.lib.dir>
+        <!-- Directory where the generated JNI header is written -->
+        <jni.header.dir>${project.build.directory}/generated-jni</jni.header.dir>
     </properties>
 
     <dependencies>
@@ -43,10 +52,141 @@
         </dependency>
     </dependencies>
 
+    <!-- OS-specific settings (JNI library name, include dir, rpath flag) -->
+    <profiles>
+        <profile>
+            <id>macos</id>
+            <activation>
+                <os><family>mac</family></os>
+            </activation>
+            <properties>
+                <jni.os.include>darwin</jni.os.include>
+                <jni.lib.name>libhttp2jni.dylib</jni.lib.name>
+                <client.lib.name>libhttp2client.dylib</client.lib.name>
+                <jni.rpath>-Wl,-rpath,@loader_path</jni.rpath>
+            </properties>
+        </profile>
+        <profile>
+            <id>linux</id>
+            <activation>
+                <os><family>unix</family><name>Linux</name></os>
+            </activation>
+            <properties>
+                <jni.os.include>linux</jni.os.include>
+                <jni.lib.name>libhttp2jni.so</jni.lib.name>
+                <client.lib.name>libhttp2client.so</client.lib.name>
+                <jni.rpath>-Wl,-rpath,$ORIGIN</jni.rpath>
+            </properties>
+        </profile>
+    </profiles>
+
     <build>
-        <sourceDirectory>.</sourceDirectory>
-        <outputDirectory>build</outputDirectory>
+        <!-- Keep all outputs under build/ (mirrors the old shell layout) -->
+        <directory>${project.basedir}/build</directory>
+        <outputDirectory>${project.basedir}/build/classes</outputDirectory>
+        <finalName>http2-client-${project.version}</finalName>
+        <sourceDirectory>${project.basedir}</sourceDirectory>
+
         <plugins>
+            <!-- 1. Compile Java sources + generate JNI header (javac -h) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <compilerArgs>
+                        <arg>-h</arg>
+                        <arg>${jni.header.dir}</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+
+            <!-- 2. Compile JNI C bridge (gcc) and stage native libraries -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>compile-jni</id>
+                        <phase>process-classes</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <!-- javac -h emits Http2Client.h; the C bridge
+                                     includes it as Http2Client_jni.h to avoid
+                                     clashing with the project's own header. -->
+                                <copy file="${jni.header.dir}/Http2Client.h"
+                                      tofile="${project.basedir}/Http2Client_jni.h"
+                                      overwrite="true"/>
+
+                                <mkdir dir="${project.build.outputDirectory}/native"/>
+
+                                <!-- gcc -shared -> libhttp2jni.(dylib|so) -->
+                                <exec executable="gcc" failonerror="true">
+                                    <arg value="-shared"/>
+                                    <arg value="-fPIC"/>
+                                    <arg value="-I${java.home}/include"/>
+                                    <arg value="-I${java.home}/include/${jni.os.include}"/>
+                                    <arg value="-I${project.basedir}"/>
+                                    <arg value="-L${native.lib.dir}"/>
+                                    <arg value="-lhttp2client"/>
+                                    <arg value="${jni.rpath}"/>
+                                    <arg value="-o"/>
+                                    <arg value="${project.build.outputDirectory}/native/${jni.lib.name}"/>
+                                    <arg value="${project.basedir}/Http2Client.c"/>
+                                </exec>
+
+                                <!-- Bundle the prebuilt native C library too -->
+                                <copy file="${native.lib.dir}/${client.lib.name}"
+                                      todir="${project.build.outputDirectory}/native"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- 3. Package fat JAR: classes + org.json + native/ libs -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Native libs live in the project classes dir, so
+                                 they are included automatically; only merge deps. -->
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <transformers>
+                                <transformer
+                                    implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <manifestEntries>
+                                        <Implementation-Title>HTTP/2 Client</Implementation-Title>
+                                        <Implementation-Version>${project.version}</Implementation-Version>
+                                    </manifestEntries>
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Convenience: mvn exec:java -Dexec.mainClass=Test -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
