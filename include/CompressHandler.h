@@ -6,6 +6,7 @@
 #define COMPRESSHANDLER_H
 
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "Error.h"
 

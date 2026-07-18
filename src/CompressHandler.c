@@ -7,7 +7,6 @@
 #include <string.h>
 #include <zlib.h>
 #include <stdio.h>
-#include <stdint.h>
 
 #include "Log.h"
 
