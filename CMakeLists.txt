@@ -5,6 +5,9 @@ set(CMAKE_C_STANDARD 17)
 
 set(CMAKE_MINIMUM_REQUIRED_VERSION 3.29)
 
+# libssl.a can not be used when making a shared object, so compile it with PIC
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # Jansson: Warning: Policy CMP0148 is not set: The FindPythonInterp and FindPythonLibs modules are removed.
 cmake_policy(SET CMP0148 NEW)
 
