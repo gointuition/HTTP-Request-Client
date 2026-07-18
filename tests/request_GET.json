@@ -27,12 +27,12 @@
     "accept-language": "en-US,en;q=0.9",
     "priority": "u=1"
   },
-  "proxy": {
-    "scheme": "https",
-    "host": "127.0.0.1",
-    "port": "24801",
-    "authorization": "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
-  },
+//  "proxy": {
+//    "scheme": "https",
+//    "host": "127.0.0.1",
+//    "port": "24801",
+//    "authorization": "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
+//  },
   "session": {
     "expirationInMilliseconds": 300000
   }

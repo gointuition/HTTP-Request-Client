@@ -24,12 +24,12 @@
     "name": "test",
     "value": 123
   },
-  "proxy": {
-    "scheme": "https",
-    "host": "127.0.0.1",
-    "port": "24801",
-    "authorization": "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
-  },
+//  "proxy": {
+//    "scheme": "https",
+//    "host": "127.0.0.1",
+//    "port": "24801",
+//    "authorization": "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
+//  },
   "session": {
     "expirationInMilliseconds": 300000
   }
