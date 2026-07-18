@@ -6,7 +6,8 @@
 
 #include <string.h>
 #include <unistd.h>
-#include <pthread/pthread.h>
+//#include <pthread/pthread.h>
+#include <pthread.h>
 #include <sys/fcntl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
