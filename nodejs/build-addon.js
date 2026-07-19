@@ -18,6 +18,49 @@ const path = require('path')
 // Clear inherited compiler flags so node-gyp uses its own defaults.
 const env = { ...process.env, CFLAGS: '', CXXFLAGS: '', CPPFLAGS: '', LDFLAGS: '' }
 
+// On Windows, MSVC needs an import library (http2client.lib) to link against
+// the MinGW-built libhttp2client.dll. Generate it automatically if missing.
+if (process.platform === 'win32') {
+  const libDir = path.join(__dirname, '..', 'lib', 'shared')
+  const dll = path.join(libDir, 'libhttp2client.dll')
+  const lib = path.join(libDir, 'http2client.lib')
+
+  if (!fs.existsSync(dll)) {
+    console.error('build-addon: expected ' + dll + ' but it does not exist; ' +
+      'build the C library first (cmake --build) so libhttp2client.dll is produced.')
+    process.exit(1)
+  }
+
+  if (!fs.existsSync(lib)) {
+    console.log('build-addon: generating http2client.lib from libhttp2client.dll ...')
+
+    // Step 1: gendef (from MSYS2/MinGW) extracts exported symbols into a .def
+    const defFile = path.join(libDir, 'libhttp2client.def')
+    const gendef = spawnSync('gendef', [dll], { cwd: libDir, stdio: 'inherit', env })
+    if (gendef.error || gendef.status !== 0) {
+      console.error('build-addon: gendef failed. Make sure gendef is on PATH ' +
+        '(pacman -S mingw-w64-x86_64-tools-git).')
+      process.exit(1)
+    }
+
+    // Step 2: lib.exe (MSVC) creates the import library from the .def
+    const libExe = spawnSync('lib', [
+      '/def:' + defFile,
+      '/out:' + lib,
+      '/machine:x64'
+    ], { cwd: libDir, stdio: 'inherit', env })
+    if (libExe.error || libExe.status !== 0) {
+      console.error('build-addon: lib.exe failed. Run this script from a ' +
+        '"x64 Native Tools Command Prompt for VS 2022" so lib.exe is on PATH.')
+      process.exit(1)
+    }
+
+    // Clean up intermediate .def file
+    try { fs.unlinkSync(defFile) } catch (_) { /* ignore */ }
+    console.log('build-addon: generated ' + lib)
+  }
+}
+
 const args = ['rebuild']
 
 // Resolve the locally installed node-gyp entry point.
@@ -41,11 +84,6 @@ if (result.status !== 0) {
 if (process.platform === 'win32') {
   const dll = path.join(__dirname, '..', 'lib', 'shared', 'libhttp2client.dll')
   const destDir = path.join(__dirname, 'build', 'Release')
-  if (!fs.existsSync(dll)) {
-    console.error('build-addon: expected ' + dll + ' but it does not exist; ' +
-      'build the C library first (cmake --build) so libhttp2client.dll is produced.')
-    process.exit(1)
-  }
   fs.mkdirSync(destDir, { recursive: true })
   fs.copyFileSync(dll, path.join(destDir, 'libhttp2client.dll'))
   console.log('build-addon: copied libhttp2client.dll -> ' + destDir)
