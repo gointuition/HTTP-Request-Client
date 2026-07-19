@@ -143,9 +143,15 @@ public class Http2Client {
      * Extract a JAR resource to a temporary file.
      */
     private static File extractToTemp(String resourcePath, String fileName) throws IOException {
-        File tempDir = new File(System.getProperty("java.io.tmpdir"), "http2client-native");
+        // Extract into a per-version subdirectory but keep the REAL library
+        // filename. This lets a co-located dependent library (libhttp2jni ->
+        // libhttp2client) be resolved via rpath ($ORIGIN on Linux, @loader_path
+        // on macOS) at load time. A version-suffixed filename would break the
+        // name-based lookup on Linux and cause "undefined symbol" errors.
+        File tempDir = new File(System.getProperty("java.io.tmpdir"),
+                "http2client-native" + File.separator + getVersion());
         tempDir.mkdirs();
-        File tempFile = new File(tempDir, fileName + "-" + getVersion());
+        File tempFile = new File(tempDir, fileName);
         tempFile.deleteOnExit();
 
         try (InputStream in = Http2Client.class.getResourceAsStream(resourcePath)) {

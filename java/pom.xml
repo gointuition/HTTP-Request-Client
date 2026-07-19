@@ -124,19 +124,24 @@
 
                                 <mkdir dir="${project.build.outputDirectory}/native"/>
 
-                                <!-- gcc -shared -> libhttp2jni.(dylib|so) -->
+                                <!-- gcc -shared -> libhttp2jni.(dylib|so)
+                                     NOTE: the source object must precede -lhttp2client.
+                                     On Linux gcc defaults to as-needed linking, so a
+                                     library listed before the object that references it
+                                     gets its DT_NEEDED dropped, leaving libhttp2jni with
+                                     an unresolved `initialiseEnv` at load time. -->
                                 <exec executable="gcc" failonerror="true">
                                     <arg value="-shared"/>
                                     <arg value="-fPIC"/>
                                     <arg value="-I${java.home}/include"/>
                                     <arg value="-I${java.home}/include/${jni.os.include}"/>
                                     <arg value="-I${project.basedir}"/>
-                                    <arg value="-L${native.lib.dir}"/>
-                                    <arg value="-lhttp2client"/>
                                     <arg value="${jni.rpath}"/>
                                     <arg value="-o"/>
                                     <arg value="${project.build.outputDirectory}/native/${jni.lib.name}"/>
                                     <arg value="${project.basedir}/Http2Client.c"/>
+                                    <arg value="-L${native.lib.dir}"/>
+                                    <arg value="-lhttp2client"/>
                                 </exec>
 
                                 <!-- Bundle the prebuilt native C library too -->
