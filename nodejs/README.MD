@@ -28,7 +28,7 @@ cd nodejs
 npm install        # runs build-addon.js
 ```
 
-`build-addon.js` detects Windows and passes `--format=make` to `node-gyp`, so it uses GCC + make instead of Visual Studio. It also copies `libhttp2client.dll` next to the compiled `http2addon.node` (Windows has no rpath) so the addon loads at runtime.
+`build-addon.js` detects Windows and tells `node-gyp` to use the **make** generator (`rebuild -- -f make`), so it builds with GCC + make instead of Visual Studio. It also copies `libhttp2client.dll` next to the compiled `http2addon.node` (Windows has no rpath) so the addon loads at runtime.
 
 To rebuild explicitly:
 
