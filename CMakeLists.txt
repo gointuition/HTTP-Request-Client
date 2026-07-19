@@ -93,20 +93,24 @@ if (NOT ZLIB_FOUND)
 
     add_subdirectory(${ZLIB_DIR})
 
-    # zlib's CMake exports 'zlib' (shared) and 'zlibstatic' (static) targets,
-    # not the ZLIB::ZLIB imported target that find_package provides. Create an
-    # alias so the rest of the project can keep linking ZLIB::ZLIB.
-    if (TARGET zlibstatic)
-        add_library(ZLIB::ZLIB ALIAS zlibstatic)
-    else ()
-        add_library(ZLIB::ZLIB ALIAS zlib)
+    # zlib's CMake exports 'zlib' (shared) and 'zlibstatic' (static) targets.
+    # Recent zlib versions already define the ZLIB::ZLIB alias themselves, so
+    # only create it when it is missing to keep downstream ZLIB::ZLIB links working.
+    if (NOT TARGET ZLIB::ZLIB)
+        if (TARGET zlibstatic)
+            add_library(ZLIB::ZLIB ALIAS zlibstatic)
+        else ()
+            add_library(ZLIB::ZLIB ALIAS zlib)
+        endif ()
     endif ()
 
     # zlib.h is generated into the build dir (zconf.h) plus the source dir.
-    target_include_directories(zlibstatic PUBLIC
-            $<BUILD_INTERFACE:${ZLIB_DIR}>
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/third_party/zlib>
-    )
+    if (TARGET zlibstatic)
+        target_include_directories(zlibstatic PUBLIC
+                $<BUILD_INTERFACE:${ZLIB_DIR}>
+                $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/third_party/zlib>
+        )
+    endif ()
 endif ()
 
 ##### zlib end
