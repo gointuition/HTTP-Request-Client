@@ -172,12 +172,22 @@ static int connectWithTimeout(Basket *basket, int sockfd, const struct sockaddr 
         return -1;
     }
 
-    // Validate socket file descriptor
-    if (sockfd < 0 || sockfd >= FD_SETSIZE) {
-        LOG("ERROR", "socket invalid file descriptor: %d (FD_SETSIZE: %d)", sockfd, FD_SETSIZE);
+    // Validate socket file descriptor.
+    // On POSIX, fd_set is a bitmap indexed by the fd value, so the fd must be < FD_SETSIZE.
+    // On Windows, fd_set holds an array of SOCKET handles (FD_SETSIZE bounds the *count*
+    // of sockets, not the handle value), so a large handle like 388 is perfectly valid.
+    if (sockfd < 0) {
+        LOG("ERROR", "socket invalid file descriptor: %d", sockfd);
         basket -> error = isProxy == 1 ? ERR_PROXY_SOCKET_INVALID_FILE_DESCRIPTOR : ERR_SESSION_SOCKET_INVALID_FILE_DESCRIPTOR;
         return -1;
     }
+#ifndef _WIN32
+    if (sockfd >= FD_SETSIZE) {
+        LOG("ERROR", "socket fd %d exceeds FD_SETSIZE %d", sockfd, FD_SETSIZE);
+        basket -> error = isProxy == 1 ? ERR_PROXY_SOCKET_INVALID_FILE_DESCRIPTOR : ERR_SESSION_SOCKET_INVALID_FILE_DESCRIPTOR;
+        return -1;
+    }
+#endif
 
     // connection in progress, wait with timeout
     fd_set writeFds;
