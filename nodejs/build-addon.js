@@ -11,9 +11,44 @@
 //      After the build we copy libhttp2client.dll next to the addon so it can
 //      be found at runtime (Windows has no rpath).
 
-const { spawnSync } = require('child_process')
+const { spawnSync, execFileSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
+
+// Locate MSVC lib.exe. Tries PATH first, then falls back to vswhere.
+function findLibExe() {
+  // 1. Already on PATH?
+  const which = spawnSync('where', ['lib'], { stdio: 'pipe', env: process.env })
+  if (!which.error && which.status === 0) return 'lib'
+
+  // 2. Use vswhere (ships with VS Installer) to find the installation root.
+  const vswhere = path.join(
+    process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
+    'Microsoft Visual Studio', 'Installer', 'vswhere.exe'
+  )
+  if (!fs.existsSync(vswhere)) return null
+
+  let installPath
+  try {
+    installPath = execFileSync(vswhere, [
+      '-latest', '-products', '*',
+      '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+      '-property', 'installationPath'
+    ], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+  } catch (_) { return null }
+  if (!installPath) return null
+
+  // 3. Construct path to x64 lib.exe
+  const libPath = path.join(installPath, 'VC', 'Tools', 'MSVC')
+  if (!fs.existsSync(libPath)) return null
+  // Pick the latest MSVC toolset version
+  const versions = fs.readdirSync(libPath).sort().reverse()
+  for (const ver of versions) {
+    const candidate = path.join(libPath, ver, 'bin', 'Hostx64', 'x64', 'lib.exe')
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return null
+}
 
 // Clear inherited compiler flags so node-gyp uses its own defaults.
 const env = { ...process.env, CFLAGS: '', CXXFLAGS: '', CPPFLAGS: '', LDFLAGS: '' }
@@ -44,14 +79,21 @@ if (process.platform === 'win32') {
     }
 
     // Step 2: lib.exe (MSVC) creates the import library from the .def
-    const libExe = spawnSync('lib', [
+    const libExePath = findLibExe()
+    if (!libExePath) {
+      console.error('build-addon: cannot find MSVC lib.exe. Install Visual Studio ' +
+        '2022 with "Desktop development with C++" workload, or run this script ' +
+        'from a "x64 Native Tools Command Prompt".')
+      process.exit(1)
+    }
+    console.log('build-addon: using ' + libExePath)
+    const libExe = spawnSync(libExePath, [
       '/def:' + defFile,
       '/out:' + lib,
       '/machine:x64'
     ], { cwd: libDir, stdio: 'inherit', env })
     if (libExe.error || libExe.status !== 0) {
-      console.error('build-addon: lib.exe failed. Run this script from a ' +
-        '"x64 Native Tools Command Prompt for VS 2022" so lib.exe is on PATH.')
+      console.error('build-addon: lib.exe failed.')
       process.exit(1)
     }
 
