@@ -192,6 +192,43 @@ cd python && bash build.sh
 cd java && bash build.sh
 ```
 
+## Troubleshooting
+
+### Windows: `No CMAKE_ASM_NASM_COMPILER could be found`
+
+On Windows, BoringSSL compiles its optimized crypto routines from `.asm` sources, which requires the [NASM](https://www.nasm.us/) assembler. CMake aborts when `nasm` is not on your `PATH`. Choose one of the following fixes:
+
+**Option A — Install NASM (recommended, keeps assembly optimizations)**
+
+1. Install NASM:
+   ```powershell
+   choco install nasm
+   ```
+   Or download the installer from <https://www.nasm.us/> and install it.
+2. Make sure `nasm.exe` is on your `PATH` (the default install dir is `C:\Program Files\NASM`). Open a **new** terminal and verify:
+   ```powershell
+   nasm --version
+   ```
+3. Delete the CMake cache and re-configure so the compiler is re-detected:
+   ```powershell
+   rmdir /s /q build
+   cmake -B build
+   cmake --build build
+   ```
+
+If CMake still cannot find it, point it explicitly:
+```powershell
+cmake -B build -DCMAKE_ASM_NASM_COMPILER="C:\Program Files\NASM\nasm.exe"
+```
+
+**Option B — Disable assembly optimizations (no NASM needed)**
+
+Build BoringSSL in pure-C mode. This is slightly slower but avoids the assembler dependency entirely:
+```powershell
+cmake -B build -DOPENSSL_NO_ASM=1
+cmake --build build
+```
+
 ## Tech Stack
 
 | Component | Library | Purpose |

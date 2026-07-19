@@ -65,7 +65,51 @@ endif ()
 
 add_subdirectory(${BROTLI_DIR})
 
-find_package(ZLIB REQUIRED)
+##### zlib start
+
+# Prefer the system zlib; if it is not installed (common on Windows),
+# download and build it from source, then expose the same ZLIB::ZLIB target
+# so downstream link lines don't need to change.
+find_package(ZLIB QUIET)
+
+if (NOT ZLIB_FOUND)
+    message(STATUS "System zlib not found, downloading and building from source...")
+
+    set(ZLIB_DIR ${PROJECT_SOURCE_DIR}/third_party/zlib)
+
+    if (NOT EXISTS ${ZLIB_DIR})
+        execute_process(
+                COMMAND git clone https://github.com/madler/zlib.git ${ZLIB_DIR}
+                RESULT_VARIABLE GIT_RESULT
+        )
+        if (NOT GIT_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to download zlib")
+        endif ()
+    endif ()
+
+    # Only build the static library; skip examples/tests
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "Build zlib examples" FORCE)
+    set(SKIP_INSTALL_ALL ON CACHE BOOL "Skip zlib install" FORCE)
+
+    add_subdirectory(${ZLIB_DIR})
+
+    # zlib's CMake exports 'zlib' (shared) and 'zlibstatic' (static) targets,
+    # not the ZLIB::ZLIB imported target that find_package provides. Create an
+    # alias so the rest of the project can keep linking ZLIB::ZLIB.
+    if (TARGET zlibstatic)
+        add_library(ZLIB::ZLIB ALIAS zlibstatic)
+    else ()
+        add_library(ZLIB::ZLIB ALIAS zlib)
+    endif ()
+
+    # zlib.h is generated into the build dir (zconf.h) plus the source dir.
+    target_include_directories(zlibstatic PUBLIC
+            $<BUILD_INTERFACE:${ZLIB_DIR}>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/third_party/zlib>
+    )
+endif ()
+
+##### zlib end
 
 ##### Brotli end
 
