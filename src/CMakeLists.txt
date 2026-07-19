@@ -39,13 +39,22 @@ target_include_directories(${HTTP2_CLIENT} PRIVATE
 #        ${ZLOG_DIR}/src
 )
 # linked against third parties
+# On Windows, link zlibstatic directly to guarantee static linking;
+# newer zlib versions define ZLIB::ZLIB as an alias to the SHARED target,
+# which would introduce a runtime dependency on libz.dll.
+if (WIN32 AND TARGET zlibstatic)
+    set(ZLIB_LINK_TARGET zlibstatic)
+else ()
+    set(ZLIB_LINK_TARGET ZLIB::ZLIB)
+endif ()
+
 target_link_libraries(${HTTP2_CLIENT} PRIVATE
         crypto
         ssl
         brotlicommon
         brotlidec
         brotlienc
-        ZLIB::ZLIB
+        ${ZLIB_LINK_TARGET}
         libzstd_static
         jansson
 #        zlog
