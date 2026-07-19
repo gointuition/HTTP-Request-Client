@@ -4,37 +4,61 @@ High-performance HTTP/2 client with native C implementation using N-API.
 
 ## Prerequisites
 
-Build the shared library first:
+### 1. Build the C shared library
 
 ```bash
-cd <project_root> && mkdir -p build && cd build && cmake .. && make
+cd <project_root>
+cmake -B build && cmake --build build -j$(nproc)
 ```
 
-Install dependencies:
+This produces `lib/shared/libhttp2client.{dylib,so,dll}`.
+
+### 2. Install the addon
 
 ```bash
-npm install
-```
-
-This will automatically compile the native addon via `node-gyp`.
-
-### Windows (MSYS2 / MinGW-w64)
-
-The addon must be built with the **same MinGW-w64 toolchain** that builds `libhttp2client.dll` (native MSVC is not supported). Run everything from the **MSYS2 MinGW64** shell, using its Node.js and toolchain:
-
-```bash
-pacman -S --needed mingw-w64-x86_64-nodejs mingw-w64-x86_64-toolchain make
 cd nodejs
-npm install        # runs build-addon.js
+npm install   # automatically runs build-addon.js
 ```
 
-`build-addon.js` detects Windows and tells `node-gyp` to use the **make** generator (`rebuild -- -f make`), so it builds with GCC + make instead of Visual Studio. It also copies `libhttp2client.dll` next to the compiled `http2addon.node` (Windows has no rpath) so the addon loads at runtime.
+### Windows (MSVC + MinGW dual-toolchain)
 
-To rebuild explicitly:
+On Windows the project uses a **split toolchain**:
+
+| Component | Compiler | Output |
+|-----------|----------|--------|
+| C library | MinGW-w64 (MSYS2 MINGW64) | `libhttp2client.dll` |
+| Node.js addon | MSVC (node-gyp default) | `http2addon.node` |
+
+**Requirements:**
+
+- [MSYS2](https://www.msys2.org/) with MINGW64 toolchain (`pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-tools-git`)
+- Visual Studio 2022 with "Desktop development with C++" workload
+- NASM, Go (for BoringSSL)
+- Node.js >= 14, CMake >= 3.29
+
+**Step 1 — Build the C library** (MSYS2 MINGW64 shell):
 
 ```bash
+cd /e/Files/HTTP-Request-Client
+cmake -B build -G "MinGW Makefiles"
+cmake --build build -j4
+```
+
+**Step 2 — Build the addon** (any terminal — cmd / PowerShell / MSYS2):
+
+```bash
+cd nodejs
 npm run build
 ```
+
+`build-addon.js` automates the entire process:
+1. Generates `http2client.lib` (MSVC import library) from `libhttp2client.dll` using `gendef` + `lib.exe`
+2. Runs `node-gyp rebuild` (MSVC compiles the addon)
+3. Copies runtime DLLs to `build/Release/`:
+   - `libhttp2client.dll`
+   - `libwinpthread-1.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll` (MinGW runtime)
+
+> **Note:** zlib is statically linked into `libhttp2client.dll`, so no external zlib DLL is needed.
 
 ## Usage
 
@@ -138,7 +162,7 @@ Cleanup resources and release memory.
 ## Response Structure
 
 ```typescript
-{
+interface HttpResult {
     url: string;
     method: string;
     request: {

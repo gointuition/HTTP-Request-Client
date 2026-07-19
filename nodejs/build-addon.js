@@ -131,16 +131,8 @@ if (process.platform === 'win32') {
   fs.copyFileSync(dll, path.join(destDir, 'libhttp2client.dll'))
   console.log('build-addon: copied libhttp2client.dll -> ' + destDir)
 
-  // libhttp2client.dll depends on zlib1.dll (built by CMake from third_party/zlib).
-  // Copy it from lib/shared/ if present.
-  const zlibDll = path.join(libDir, 'zlib1.dll')
-  if (fs.existsSync(zlibDll)) {
-    fs.copyFileSync(zlibDll, path.join(destDir, 'zlib1.dll'))
-    console.log('build-addon: copied zlib1.dll -> ' + destDir)
-  } else {
-    console.warn('build-addon: warning - zlib1.dll not found in ' + libDir +
-      '; the addon may fail to load.')
-  }
+  // zlib is statically linked into libhttp2client.dll (see CMakeLists.txt),
+  // so no external zlib DLL is needed at runtime.
 
   // libhttp2client.dll is built with MinGW and depends on MinGW runtime DLLs
   // (libwinpthread-1.dll, libgcc_s_seh-1.dll, etc.). Locate them via gendef's
