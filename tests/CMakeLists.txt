@@ -47,6 +47,17 @@ foreach (source_file ${SRC})
             ZLIB::ZLIB
             jansson
     )
+
+    # Windows: the loader only searches the executable's own directory (and PATH),
+    # not lib/shared, so copy libhttp2client.dll next to the test executable.
+    if (WIN32)
+        add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:${HTTP2_CLIENT}>
+                $<TARGET_FILE_DIR:${target_name}>
+                COMMENT "Copying libhttp2client.dll next to ${target_name}"
+        )
+    endif ()
 endforeach ()
 
 
