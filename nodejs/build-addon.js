@@ -18,6 +18,8 @@
 // `configure` so the make generator actually takes effect.
 
 const { spawnSync } = require('child_process')
+const fs = require('fs')
+const path = require('path')
 
 // Clear inherited compiler flags so node-gyp uses its own defaults.
 const env = { ...process.env, CFLAGS: '', CXXFLAGS: '', CPPFLAGS: '', LDFLAGS: '' }
@@ -41,4 +43,25 @@ if (result.error) {
   console.error(result.error)
   process.exit(1)
 }
-process.exit(result.status === null ? 1 : result.status)
+if (result.status !== 0) {
+  process.exit(result.status === null ? 1 : result.status)
+}
+
+// Windows has no rpath, so the addon can only find libhttp2client.dll if it
+// sits next to it. Copy it after a successful build. (Done here in JS rather
+// than via gyp "copies", whose make generator emits drive-letter paths that
+// break GNU make.)
+if (process.platform === 'win32') {
+  const dll = path.join(__dirname, '..', 'lib', 'shared', 'libhttp2client.dll')
+  const destDir = path.join(__dirname, 'build', 'Release')
+  if (!fs.existsSync(dll)) {
+    console.error('build-addon: expected ' + dll + ' but it does not exist; ' +
+      'build the C library first (cmake --build) so libhttp2client.dll is produced.')
+    process.exit(1)
+  }
+  fs.mkdirSync(destDir, { recursive: true })
+  fs.copyFileSync(dll, path.join(destDir, 'libhttp2client.dll'))
+  console.log('build-addon: copied libhttp2client.dll -> ' + destDir)
+}
+
+process.exit(0)
