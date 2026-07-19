@@ -5,14 +5,10 @@
 #include "ResponseHandler.h"
 
 #include <string.h>
-#include <netdb.h>
-
-#include <arpa/inet.h>
-
-#include <unistd.h>
 #include <zlib.h>
 #include <ctype.h>
-#include <sys/fcntl.h>
+
+#include "Compat.h"
 
 #include "SSLHandler.h"
 #include "Error.h"
@@ -160,8 +156,7 @@ void receiveResponse(Basket *basket) {
 
     // set socket to non-blocking
     int fd = SSL_get_fd(basket -> session -> ssl);
-    int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    setSocketNonBlocking(fd);
 
     int timeout = 0;
     int maxTimeout = basket -> responseReadingTimeoutInMilliseconds;
@@ -257,7 +252,7 @@ void receiveResponse(Basket *basket) {
         } else {
             int err = SSL_get_error(basket -> session -> ssl, bytesRead);
             if (err == SSL_ERROR_WANT_READ) {
-                usleep(10000);
+                sleepMicroseconds(10000);
                 LOG("DEBUG", "waited %dms", timeout);
                 timeout += 10; // 10 ms
             } else {
@@ -276,7 +271,7 @@ void receiveResponse(Basket *basket) {
 
     // if (hpackCtx) { freeHpackContext(hpackCtx); }
     // reset socket flag
-    fcntl(fd, F_SETFL, flags);
+    setSocketBlocking(fd);
 }
 
 static void processFrame(Basket *basket, unsigned char *payload, uint32_t length,

@@ -5,12 +5,9 @@
 #include "RequestHandler.h"
 
 #include <string.h>
-#include <netdb.h>
-
-#include <arpa/inet.h>
-
-#include <unistd.h>
 #include <zlib.h>
+
+#include "Compat.h"
 
 #include "SSLHandler.h"
 #include "Error.h"

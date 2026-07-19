@@ -17,10 +17,11 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <ctype.h>
 #include <pthread.h>
 #include <zlib.h>
+
+#include "Compat.h"
 
 #include "SocketHandler.h"
 #include "Error.h"
@@ -52,6 +53,12 @@ Http2Client* newHttp2Client(void) {
 }
 
 void initialiseEnv(void) {
+#ifdef _WIN32
+    // Winsock must be initialised before any socket call
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+#endif
+
     initSharedSessionPool();
     buildHuffmanTree();
 
@@ -65,6 +72,10 @@ void initialiseEnv(void) {
 void cleanupEnv(void) {
     cleanupSessions(1);
     cleanupTLSSessionCache();
+
+#ifdef _WIN32
+    WSACleanup();
+#endif
 
     // freeHashTable_InetAddress(tableInetAddress);
     // tableInetAddress = NULL;

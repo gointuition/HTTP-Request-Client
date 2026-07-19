@@ -7,8 +7,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#include <netdb.h>
-#include <arpa/inet.h>
+#include "Compat.h"
 
 #include "UrlParser.h"
 #include "Log.h"

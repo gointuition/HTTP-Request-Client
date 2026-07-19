@@ -9,14 +9,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/socket.h>
-#include <netdb.h>
 #include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <poll.h>
+
+#include "Compat.h"
 
 static char* getAddressIPPort(const struct sockaddr *sa);
 static int connectWithTimeout(Basket *basket, int sockfd, const struct sockaddr *addr, socklen_t addrlen, int timeoutInMillis, int isProxy);
@@ -33,7 +28,7 @@ int createSocketThroughProxy(Basket *basket) {
     // connect to proxy
     int connected = connectToProxy(basket, sockfd);
     if (connected < 0) {
-        close(sockfd);
+        closeSocket(sockfd);
         return -1;
     }
 
@@ -70,7 +65,7 @@ int createSocket(Basket *basket, const char *host, const char *port, int isProxy
             break;
         }
 
-        close(sockfd);
+        closeSocket(sockfd);
     }
 
     freeaddrinfo(result);
@@ -157,8 +152,7 @@ static int connectToProxy(Basket *basket, int sockfd) {
 
 static int connectWithTimeout(Basket *basket, int sockfd, const struct sockaddr *addr, socklen_t addrlen, int timeoutInMillis, int isProxy) {
     // set socket non-blocking mode
-    const int flags = fcntl(sockfd, F_GETFL, 0);
-    if (fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    if (setSocketNonBlocking(sockfd) < 0) {
         LOG("ERROR", "failed to set socket non-block");
         basket -> error = isProxy == 1 ? ERR_PROXY_SOCKET_NONBLOCK_SETTING_FAILED : ERR_SESSION_SOCKET_NONBLOCK_SETTING_FAILED;
         return -1;
@@ -168,11 +162,11 @@ static int connectWithTimeout(Basket *basket, int sockfd, const struct sockaddr 
     const int rc = connect(sockfd, addr, addrlen);
     if (rc == 0) {
         // connected immediately, restore blocking mode
-        fcntl(sockfd, F_SETFL, flags);
+        setSocketBlocking(sockfd);
         return 0;
     }
 
-    if (errno != EINPROGRESS) {
+    if (SOCKET_LAST_ERROR != SOCKET_EINPROGRESS) {
         LOG("ERROR", "socket connecting failed, errno != EINPROGRESS");
         basket -> error = isProxy == 1 ? ERR_PROXY_SOCKET_CONNECTING_FAILED : ERR_SESSION_SOCKET_CONNECTING_FAILED;
         return -1;
@@ -236,7 +230,7 @@ static int connectWithTimeout(Basket *basket, int sockfd, const struct sockaddr 
         return -1;
     }
 
-    if (error == ECONNREFUSED) {
+    if (error == SOCKET_ECONNREFUSED) {
         LOG("ERROR", "socket connecting refused");
         basket -> error = isProxy == 1 ? ERR_PROXY_SOCKET_CONNECTING_REFUSED : ERR_SESSION_SOCKET_CONNECTING_REFUSED;
         return -1;
@@ -250,7 +244,7 @@ static int connectWithTimeout(Basket *basket, int sockfd, const struct sockaddr 
     }
 
     // connected, restore to blocking mode
-    fcntl(sockfd, F_SETFL, flags);
+    setSocketBlocking(sockfd);
     return 0;
 }
 

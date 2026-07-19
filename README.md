@@ -40,6 +40,7 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 │   ├── Basket.h        # Request/Response/Session data structures
 │   ├── SSLHandler.h    # TLS layer
 │   ├── Session.h       # Connection session pool
+│   ├── Compat.h        # POSIX <-> Winsock2 networking shim
 │   └── ...
 ├── src/                # C source
 │   ├── Http2Client.c   # init / request / cleanup
@@ -106,6 +107,20 @@ Native MSVC is not supported. Build inside the **MSYS2 MinGW64** shell, whose GC
    (Use `-G "MinGW Makefiles"` if Ninja is not installed.)
 
 > If configuration fails with `No CMAKE_ASM_NASM_COMPILER could be found`, install NASM (`pacman -S mingw-w64-x86_64-nasm`) or pass `-DOPENSSL_NO_ASM=1`. See [Troubleshooting](#troubleshooting).
+
+#### Networking compatibility layer
+
+The networking code is written against the POSIX BSD socket API. On Windows this is bridged to Winsock2 by [`include/Compat.h`](include/Compat.h), so no source changes are needed per platform:
+
+| POSIX | Windows (via `Compat.h`) |
+|-------|--------------------------|
+| `<sys/socket.h>`, `<netdb.h>`, `<arpa/inet.h>` | `<winsock2.h>`, `<ws2tcpip.h>` |
+| `close(fd)` | `closeSocket(fd)` → `closesocket` |
+| `fcntl(fd, ..., O_NONBLOCK)` | `setSocketNonBlocking` / `setSocketBlocking` → `ioctlsocket(FIONBIO)` |
+| `errno` / `EINPROGRESS` / `ECONNREFUSED` | `SOCKET_LAST_ERROR` / `SOCKET_EINPROGRESS` / `SOCKET_ECONNREFUSED` |
+| `usleep` | `sleepMicroseconds` → `Sleep` |
+
+`WSAStartup` / `WSACleanup` are invoked automatically inside `initialiseEnv()` / `cleanupEnv()`, and the Winsock library (`ws2_32`) is linked automatically on Windows. No extra setup is required.
 
 This produces:
 - `lib/shared/libhttp2client.dylib` (macOS) / `.so` (Linux) / `.dll` (Windows) — shared library for language bindings

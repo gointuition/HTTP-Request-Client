@@ -5,13 +5,10 @@
 #include "Session.h"
 
 #include <string.h>
-#include <unistd.h>
 //#include <pthread/pthread.h>
 #include <pthread.h>
-#include <sys/fcntl.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <errno.h>
+
+#include "Compat.h"
 
 #include "RequestHandler.h"
 #include "SocketHandler.h"
@@ -161,7 +158,7 @@ void freeSession(SSL* ssl, SSL_CTX* ctx, int sockfd, HpackContext *hpackCtx, Err
         SSL_CTX_free(ctx);
     }
     if (sockfd >= 0) {
-        close(sockfd);
+        closeSocket(sockfd);
     }
     if (hpackCtx) {
         // TODO not encountered yet

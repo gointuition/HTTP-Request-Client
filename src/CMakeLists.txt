@@ -7,6 +7,10 @@ file(GLOB_RECURSE SRC ./*.c)
 # find include headers files
 include_directories(${HEADER_PATH})
 
+# threading library (pthread on POSIX / winpthreads on MinGW)
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 # define lib output path
 set(LIBRARY_OUTPUT_PATH ${LIB_PATH_SHARED})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${LIB_PATH_SHARED})
@@ -46,3 +50,11 @@ target_link_libraries(${HTTP2_CLIENT} PRIVATE
         jansson
 #        zlog
 )
+
+# threading + platform-specific system libraries
+target_link_libraries(${HTTP2_CLIENT} PRIVATE Threads::Threads)
+
+# Windows: link the Winsock2 socket library
+if (WIN32)
+    target_link_libraries(${HTTP2_CLIENT} PRIVATE ws2_32)
+endif ()
