@@ -44,6 +44,10 @@ if (NOT EXISTS ${BORINGSSL_DIR})
 endif ()
 
 # add BoringSSL as a subdirectory
+# Only the crypto/ssl libraries are needed; skip building BoringSSL's own
+# test suite (crypto_test/ssl_test), which fails to compile under some
+# toolchains (e.g. MinGW-w64) and is irrelevant to this project.
+set(BUILD_TESTING OFF CACHE BOOL "Build the testing tree" FORCE)
 add_subdirectory(${BORINGSSL_DIR})
 
 ##### Boringssl end
