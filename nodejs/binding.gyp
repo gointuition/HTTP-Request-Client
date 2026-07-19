@@ -2,6 +2,13 @@
   "targets": [
     {
       "target_name": "http2addon",
+      # Disable node-gyp's Windows delay-load hook. It pulls in
+      # win_delay_load_hook.cc via an absolute path (E:/.../node-gyp/src/...),
+      # which node-gyp's make generator bakes into a rule as a drive-letter path
+      # and breaks GNU make ("target pattern contains no '%'"). The hook is also
+      # MSVC-specific (<delayimp.h>) and unusable under MinGW. We load in a
+      # normally-named node.exe, so the hook is unnecessary.
+      "win_delay_load_hook": "false",
       "sources": ["http2-addon.cc"],
       "include_dirs": [
         "<(module_root_dir)/../include"
