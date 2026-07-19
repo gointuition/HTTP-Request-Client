@@ -223,7 +223,7 @@ static int connectWithTimeout(Basket *basket, int sockfd, const struct sockaddr 
     // check if socket has error
     int error = 0;
     socklen_t errorLen = sizeof(error);
-    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &errorLen) < 0) {
+    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (char *) &error, &errorLen) < 0) {
         // setLastErrorMessage("getsockopt failed when connecting");
         LOG("ERROR", "getsockopt failed when connecting");
         basket -> error = isProxy == 1 ? ERR_PROXY_SOCKET_CONNECTING_UNKNOWN_ERROR : ERR_SESSION_SOCKET_CONNECTING_UNKNOWN_ERROR;

@@ -100,7 +100,7 @@ int isConnecting(Session *session) {
     int error = 0;
     socklen_t len = sizeof(error);
 
-    int ret = getsockopt(session -> sockfd, SOL_SOCKET, SO_ERROR, &error, &len);
+    int ret = getsockopt(session -> sockfd, SOL_SOCKET, SO_ERROR, (char *) &error, &len);
 
     if (ret != 0) {
         // invalid socket
