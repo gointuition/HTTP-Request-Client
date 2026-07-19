@@ -79,7 +79,10 @@ java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
 java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Example
 ```
 
-> Running in classpath mode requires `--enable-native-access=ALL-UNNAMED` to enable native access.
+> The `--enable-native-access=ALL-UNNAMED` flag applies only to **JDK 16+** (JEP 389).
+> On JDK 24+ (JEP 472) it also suppresses the native-access warning. Omit it on
+> older JDKs (< 16), which reject it as an unrecognized option. `build.sh` detects
+> the Java major version and adds the flag automatically only when supported.
 
 ### Calling from Java code
 

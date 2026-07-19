@@ -160,6 +160,9 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <!-- Fat JAR is used directly (java -cp), not as a
+                                 Maven dependency, so skip the reduced pom. -->
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
                             <!-- Native libs live in the project classes dir, so
                                  they are included automatically; only merge deps. -->
                             <filters>

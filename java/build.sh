@@ -38,12 +38,30 @@ echo "Shared library found: $PROJECT_ROOT/lib/shared/$LIB_NAME"
 
 # Check Java
 echo ""
-echo "Java version:"
-java -version 2>&1 || {
+JAVA_VERSION_OUTPUT="$(java -version 2>&1)" || {
     echo "Error: Java not found. Install with: brew install openjdk"
     echo "Then add to PATH: export PATH=\"/opt/homebrew/opt/openjdk/bin:\$PATH\""
     exit 1
 }
+echo "Java version:"
+echo "$JAVA_VERSION_OUTPUT"
+
+# Parse the major version (JDK 8 reports "1.8.x"; JDK 9+ reports "N.x.x")
+JAVA_VERSION_STR="$(echo "$JAVA_VERSION_OUTPUT" | head -1 | sed -E 's/.*version "([^"]+)".*/\1/')"
+if [ "${JAVA_VERSION_STR%%.*}" = "1" ]; then
+    JAVA_MAJOR="$(echo "$JAVA_VERSION_STR" | cut -d. -f2)"
+else
+    JAVA_MAJOR="${JAVA_VERSION_STR%%.*}"
+fi
+echo "Java major version: $JAVA_MAJOR"
+
+# --enable-native-access exists only on JDK 16+ (JEP 389); older JDKs reject it
+# as an unrecognized option. JDK 24+ (JEP 472) also warns on native access
+# without this flag, so pass it whenever the running JDK supports it.
+NATIVE_ACCESS_FLAG=""
+if [ "$JAVA_MAJOR" -ge 16 ] 2>/dev/null; then
+    NATIVE_ACCESS_FLAG="--enable-native-access=ALL-UNNAMED"
+fi
 
 # Determine JAVA_HOME (Maven and the JNI header path both rely on a JDK)
 JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home 2>/dev/null || echo "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home")}"
@@ -77,7 +95,7 @@ echo "  ..."
 echo ""
 echo "Running test from fat JAR (classpath mode)..."
 cd "$SCRIPT_DIR"
-java --enable-native-access=ALL-UNNAMED -cp "build/$JAR_NAME" Test
+java $NATIVE_ACCESS_FLAG -cp "build/$JAR_NAME" Test
 
 echo ""
 echo "Build completed successfully!"
@@ -85,7 +103,7 @@ echo ""
 echo "Fat JAR: build/$JAR_NAME"
 echo ""
 echo "To use in your project:"
-echo "  java --enable-native-access=ALL-UNNAMED -cp build/$JAR_NAME Example"
+echo "  java $NATIVE_ACCESS_FLAG -cp build/$JAR_NAME Example"
 echo ""
 echo "Java code:"
 echo "  Http2Client.init();"
