@@ -2,12 +2,9 @@
   "targets": [
     {
       "target_name": "http2addon",
-      # Disable node-gyp's Windows delay-load hook. It pulls in
-      # win_delay_load_hook.cc via an absolute path (E:/.../node-gyp/src/...),
-      # which node-gyp's make generator bakes into a rule as a drive-letter path
-      # and breaks GNU make ("target pattern contains no '%'"). The hook is also
-      # MSVC-specific (<delayimp.h>) and unusable under MinGW. We load in a
-      # normally-named node.exe, so the hook is unnecessary.
+      # Disable node-gyp's Windows delay-load hook. The hook is only needed
+      # when node.exe is renamed; we load a normally-named node.exe, so it is
+      # unnecessary.
       "win_delay_load_hook": "false",
       "sources": ["http2-addon.cc"],
       "include_dirs": [
@@ -44,12 +41,16 @@
           "ldflags": ["-Wl,-rpath,\$$ORIGIN/../../../lib/shared"]
         }],
         ["OS=='win'", {
-          "cflags_cc": ["-std=c++17"]
-          # Built with MinGW/GCC (MSYS2). -lhttp2client resolves against the
-          # import/DLL in library_dirs (../lib/shared). Windows has no rpath,
-          # so build-addon.js copies libhttp2client.dll next to the compiled
-          # addon after the build. (We don't use gyp "copies" here: its make
-          # generator emits drive-letter paths like E:/... that break GNU make.)
+          "msvs_settings": {
+            "VCCLCompilerTool": {
+              "AdditionalOptions": ["/std:c++17"]
+            }
+          }
+          # C library (libhttp2client.dll) is built with MinGW; the addon itself
+          # is built with MSVC (node-gyp default on win32). -lhttp2client resolves
+          # to http2client.lib in library_dirs (../lib/shared). Windows has no
+          # rpath, so build-addon.js copies libhttp2client.dll next to the
+          # compiled addon after the build.
         }]
       ]
     }
