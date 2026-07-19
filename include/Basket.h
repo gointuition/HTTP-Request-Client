@@ -17,6 +17,7 @@ extern "C" {
 #endif
 
 #include <stdio.h>
+#include <pthread.h>
 
 #include "UrlParser.h"
 #include "Error.h"

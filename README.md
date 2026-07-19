@@ -65,25 +65,57 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 
 - CMake >= 3.29
 - C17 compiler (Clang / GCC)
-- macOS or Linux
+- Git (third-party dependencies are cloned automatically at configure time)
+- **Windows:** [MSYS2](https://www.msys2.org/) with the MinGW-w64 toolchain (see below). This codebase relies on POSIX APIs (`pthread`, `<stdatomic.h>`, BSD sockets), which MinGW-w64 provides; native MSVC is not supported.
+
+zlib is used for gzip/deflate. On macOS/Linux the system zlib is used automatically; if it is missing it is downloaded and built from source.
 
 ## Building
 
+### macOS
+
 ```bash
-mkdir -p build && cd build
-cmake ..
-cmake --build .
+cmake -B build
+cmake --build build -j$(sysctl -n hw.ncpu)
 ```
 
+### Linux
+
+```bash
+cmake -B build
+cmake --build build -j$(nproc)
+```
+
+### Windows (MSYS2 / MinGW-w64)
+
+Native MSVC is not supported. Build inside the **MSYS2 MinGW64** shell, whose GCC ships the POSIX headers (`pthread.h`, `stdatomic.h`, sockets) this project needs.
+
+1. Install [MSYS2](https://www.msys2.org/), then open the **"MSYS2 MinGW64"** shell and install the toolchain (NASM is required by BoringSSL):
+   ```bash
+   pacman -S --needed \
+     mingw-w64-x86_64-toolchain \
+     mingw-w64-x86_64-cmake \
+     mingw-w64-x86_64-nasm \
+     git
+   ```
+2. Configure and build:
+   ```bash
+   cmake -B build -G "Ninja"
+   cmake --build build -j$(nproc)
+   ```
+   (Use `-G "MinGW Makefiles"` if Ninja is not installed.)
+
+> If configuration fails with `No CMAKE_ASM_NASM_COMPILER could be found`, install NASM (`pacman -S mingw-w64-x86_64-nasm`) or pass `-DOPENSSL_NO_ASM=1`. See [Troubleshooting](#troubleshooting).
+
 This produces:
-- `lib/shared/libhttp2client.dylib` (macOS) / `.so` (Linux) — shared library for language bindings
+- `lib/shared/libhttp2client.dylib` (macOS) / `.so` (Linux) / `.dll` (Windows) — shared library for language bindings
 - `test_GET` / `test_POST` — C test executables
 
 ### Build Output
 
 | Artifact | Path |
 |----------|------|
-| Shared library | `lib/shared/libhttp2client.{dylib,so}` |
+| Shared library | `lib/shared/libhttp2client.{dylib,so,dll}` |
 | Static library | `lib/static/libhttp2client.a` |
 | Test executables | `bin/test_GET`, `bin/test_POST` |
 
@@ -196,36 +228,35 @@ cd java && bash build.sh
 
 ### Windows: `No CMAKE_ASM_NASM_COMPILER could be found`
 
-On Windows, BoringSSL compiles its optimized crypto routines from `.asm` sources, which requires the [NASM](https://www.nasm.us/) assembler. CMake aborts when `nasm` is not on your `PATH`. Choose one of the following fixes:
+BoringSSL compiles its optimized crypto routines from `.asm` sources, which requires the [NASM](https://www.nasm.us/) assembler. CMake aborts when `nasm` is not on your `PATH`. Since Windows builds use the MSYS2 / MinGW-w64 toolchain (see [Building](#building)), choose one of the following fixes:
 
 **Option A — Install NASM (recommended, keeps assembly optimizations)**
 
-1. Install NASM:
-   ```powershell
-   choco install nasm
+1. In the **MSYS2 MinGW64** shell, install NASM:
+   ```bash
+   pacman -S --needed mingw-w64-x86_64-nasm
    ```
-   Or download the installer from <https://www.nasm.us/> and install it.
-2. Make sure `nasm.exe` is on your `PATH` (the default install dir is `C:\Program Files\NASM`). Open a **new** terminal and verify:
-   ```powershell
+2. Verify it is on your `PATH`:
+   ```bash
    nasm --version
    ```
 3. Delete the CMake cache and re-configure so the compiler is re-detected:
-   ```powershell
-   rmdir /s /q build
-   cmake -B build
+   ```bash
+   rm -rf build
+   cmake -B build -G "Ninja"
    cmake --build build
    ```
 
 If CMake still cannot find it, point it explicitly:
-```powershell
-cmake -B build -DCMAKE_ASM_NASM_COMPILER="C:\Program Files\NASM\nasm.exe"
+```bash
+cmake -B build -G "Ninja" -DCMAKE_ASM_NASM_COMPILER="$(which nasm)"
 ```
 
 **Option B — Disable assembly optimizations (no NASM needed)**
 
 Build BoringSSL in pure-C mode. This is slightly slower but avoids the assembler dependency entirely:
-```powershell
-cmake -B build -DOPENSSL_NO_ASM=1
+```bash
+cmake -B build -G "Ninja" -DOPENSSL_NO_ASM=1
 cmake --build build
 ```
 
