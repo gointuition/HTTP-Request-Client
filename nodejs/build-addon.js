@@ -122,13 +122,40 @@ if (result.status !== 0) {
 }
 
 // Windows has no rpath, so the addon can only find libhttp2client.dll if it
-// sits next to it. Copy it after a successful build.
+// sits next to it. Copy it (and MinGW runtime DLLs) after a successful build.
 if (process.platform === 'win32') {
-  const dll = path.join(__dirname, '..', 'lib', 'shared', 'libhttp2client.dll')
+  const libDir = path.join(__dirname, '..', 'lib', 'shared')
+  const dll = path.join(libDir, 'libhttp2client.dll')
   const destDir = path.join(__dirname, 'build', 'Release')
   fs.mkdirSync(destDir, { recursive: true })
   fs.copyFileSync(dll, path.join(destDir, 'libhttp2client.dll'))
   console.log('build-addon: copied libhttp2client.dll -> ' + destDir)
+
+  // libhttp2client.dll is built with MinGW and depends on MinGW runtime DLLs
+  // (libwinpthread-1.dll, libgcc_s_seh-1.dll, etc.). Locate them via gendef's
+  // PATH (which is in MinGW/bin) and copy them next to the addon.
+  const mingwRuntimes = [
+    'libwinpthread-1.dll',
+    'libgcc_s_seh-1.dll',
+    'libstdc++-6.dll'
+  ]
+  // Find MinGW bin directory from gendef location on PATH
+  const whereGendef = spawnSync('where', ['gendef'], { stdio: 'pipe', env: process.env })
+  if (!whereGendef.error && whereGendef.status === 0) {
+    const gendefPath = whereGendef.stdout.toString().trim().split(/\r?\n/)[0]
+    const mingwBin = path.dirname(gendefPath)
+    for (const rt of mingwRuntimes) {
+      const src = path.join(mingwBin, rt)
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, path.join(destDir, rt))
+        console.log('build-addon: copied ' + rt + ' -> ' + destDir)
+      }
+    }
+  } else {
+    console.warn('build-addon: warning - gendef not on PATH, cannot auto-copy ' +
+      'MinGW runtime DLLs. If the addon fails to load, ensure MinGW bin is on PATH ' +
+      'or copy libwinpthread-1.dll / libgcc_s_seh-1.dll to ' + destDir)
+  }
 }
 
 process.exit(0)
