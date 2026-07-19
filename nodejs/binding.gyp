@@ -35,6 +35,18 @@
         ["OS=='linux'", {
           "cflags_cc": ["-std=c++17"],
           "ldflags": ["-Wl,-rpath,\$$ORIGIN/../../../lib/shared"]
+        }],
+        ["OS=='win'", {
+          "cflags_cc": ["-std=c++17"],
+          # Built with MinGW/GCC (MSYS2). -lhttp2client resolves against the
+          # import/DLL in library_dirs (../lib/shared). Windows has no rpath,
+          # so copy the DLL next to the compiled addon so it loads at runtime.
+          "copies": [
+            {
+              "destination": "<(module_root_dir)/build/Release",
+              "files": ["<(module_root_dir)/../lib/shared/libhttp2client.dll"]
+            }
+          ]
         }]
       ]
     }

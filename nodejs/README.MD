@@ -18,6 +18,24 @@ npm install
 
 This will automatically compile the native addon via `node-gyp`.
 
+### Windows (MSYS2 / MinGW-w64)
+
+The addon must be built with the **same MinGW-w64 toolchain** that builds `libhttp2client.dll` (native MSVC is not supported). Run everything from the **MSYS2 MinGW64** shell, using its Node.js and toolchain:
+
+```bash
+pacman -S --needed mingw-w64-x86_64-nodejs mingw-w64-x86_64-toolchain make
+cd nodejs
+npm install        # runs build-addon.js
+```
+
+`build-addon.js` detects Windows and passes `--format=make` to `node-gyp`, so it uses GCC + make instead of Visual Studio. It also copies `libhttp2client.dll` next to the compiled `http2addon.node` (Windows has no rpath) so the addon loads at runtime.
+
+To rebuild explicitly:
+
+```bash
+npm run build
+```
+
 ## Usage
 
 ```javascript

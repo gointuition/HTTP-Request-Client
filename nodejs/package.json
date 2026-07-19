@@ -5,8 +5,8 @@
   "main": "index.js",
   "types": "index.d.ts",
   "scripts": {
-    "install": "CFLAGS='' CXXFLAGS='' CPPFLAGS='' LDFLAGS='' node-gyp rebuild",
-    "build": "CFLAGS='' CXXFLAGS='' CPPFLAGS='' LDFLAGS='' node-gyp rebuild",
+    "install": "node build-addon.js",
+    "build": "node build-addon.js",
     "clean": "node-gyp clean",
     "test": "node test.js",
     "benchmark": "node benchmark.js"
