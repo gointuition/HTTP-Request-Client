@@ -71,10 +71,13 @@ add_subdirectory(${BROTLI_DIR})
 
 ##### zlib start
 
-# Prefer the system zlib; if it is not installed (common on Windows),
-# download and build it from source, then expose the same ZLIB::ZLIB target
-# so downstream link lines don't need to change.
-find_package(ZLIB QUIET)
+# Prefer the system zlib on macOS/Linux; on Windows always build from source
+# to avoid a runtime dependency on zlib1.dll (MSYS2's shared zlib).
+if (WIN32)
+    set(ZLIB_FOUND FALSE)
+else ()
+    find_package(ZLIB QUIET)
+endif ()
 
 if (NOT ZLIB_FOUND)
     message(STATUS "System zlib not found, downloading and building from source...")
