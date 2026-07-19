@@ -7,9 +7,6 @@
       # unnecessary.
       "win_delay_load_hook": "false",
       "sources": ["http2-addon.cc"],
-      "include_dirs": [
-        "<(module_root_dir)/../include"
-      ],
       "library_dirs": [
         "<(module_root_dir)/../lib/shared"
       ],
@@ -51,6 +48,8 @@
           # to http2client.lib in library_dirs (../lib/shared). Windows has no
           # rpath, so build-addon.js copies libhttp2client.dll next to the
           # compiled addon after the build.
+          # The addon forward-declares the C API (no project headers included),
+          # so no extra include_dirs are needed for MSVC.
         }]
       ]
     }

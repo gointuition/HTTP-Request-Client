@@ -2,7 +2,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "../include/Http2Client.h"
+
+// Forward-declare the C library API directly to avoid pulling in the full
+// header chain (Basket.h -> pthread.h, openssl/ssl.h, ...) which requires
+// POSIX/BoringSSL headers that MSVC does not ship. The addon only calls
+// these three functions; it never touches the struct definitions.
+extern "C" {
+    void initialiseEnv(void);
+    void cleanupEnv(void);
+    int handleRequest(const char *requestJSONString, char *basketStr, size_t basketStrLen);
+}
 
 // Global initialization flag
 static int envInitialized = 0;
