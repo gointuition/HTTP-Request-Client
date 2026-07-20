@@ -25,6 +25,26 @@ ffi.cdef("""
 """)
 
 
+def _add_mingw_dll_path():
+    """On Windows, add MinGW bin to DLL search path for runtime dependencies."""
+    if platform.system() != "Windows":
+        return
+
+    # Common MSYS2 MinGW64 install locations
+    candidates = [
+        r"C:\msys64\mingw64\bin",
+        r"C:\mingw64\bin",
+        os.path.join(os.environ.get("MSYS2_ROOT", r"C:\msys64"), "mingw64", "bin"),
+    ]
+    for d in candidates:
+        if os.path.isdir(d) and os.path.exists(os.path.join(d, "libwinpthread-1.dll")):
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(d)
+            else:
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+            return
+
+
 def _find_library():
     """Locate the shared library relative to this file."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,6 +91,7 @@ class HttpClient:
         if self._lib is not None:
             return
 
+        _add_mingw_dll_path()
         lib_path = _find_library()
         self._lib = ffi.dlopen(lib_path)
 
