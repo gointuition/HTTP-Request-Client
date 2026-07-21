@@ -78,6 +78,20 @@
                 <jni.rpath>-Wl,-rpath,$ORIGIN</jni.rpath>
             </properties>
         </profile>
+        <profile>
+            <id>windows</id>
+            <activation>
+                <os><family>windows</family></os>
+            </activation>
+            <properties>
+                <jni.os.include>win32</jni.os.include>
+                <jni.lib.name>http2jni.dll</jni.lib.name>
+                <client.lib.name>libhttp2client.dll</client.lib.name>
+                <!-- Windows has no rpath; use -static-libgcc to embed GCC runtime
+                     into the JNI DLL, reducing external MinGW dependencies. -->
+                <jni.rpath>-static-libgcc</jni.rpath>
+            </properties>
+        </profile>
     </profiles>
 
     <build>

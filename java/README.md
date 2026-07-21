@@ -4,38 +4,90 @@
 
 ### 1. Build the C shared library
 
+**macOS / Linux:**
+
 ```bash
-cd /Users/wangbingjie/Documents/Clion/Http2
-mkdir -p build && cd build
-cmake .. && make
+cd <project_root>
+cmake -B build && cmake --build build -j$(nproc)
 ```
 
-Output: `lib/shared/libhttp2client.dylib`
+Output: `lib/shared/libhttp2client.dylib` (macOS) or `lib/shared/libhttp2client.so` (Linux)
 
-### 2. Install OpenJDK
+**Windows (MSYS2 MINGW64 shell):**
+
+```bash
+cd /e/Files/HTTP-Request-Client
+cmake -B build -G "MinGW Makefiles"
+cmake --build build -j4
+```
+
+Output: `lib/shared/libhttp2client.dll`
+
+### 2. Install JDK
+
+**macOS:**
 
 ```bash
 brew install openjdk
-# Add to PATH (append to ~/.zshrc to persist)
 echo 'export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
-# Verify
+```
+
+**Windows:**
+
+Download and install [Eclipse Temurin JDK](https://adoptium.net/) (or Oracle JDK).
+Ensure `java` and `javac` are on PATH.
+
+```powershell
 java -version
 ```
 
 ### 3. Install Maven
 
+**macOS:**
+
 ```bash
 brew install maven
-# Verify
+```
+
+**Windows:**
+
+Download from https://maven.apache.org/download.cgi, extract, and add `bin/` to PATH.
+
+```powershell
 mvn -version
 ```
 
+### Windows additional requirements
+
+| Tool | Purpose |
+|------|---------|
+| [MSYS2](https://www.msys2.org/) MINGW64 | Builds the C library (`libhttp2client.dll`) and the JNI bridge |
+| MinGW-w64 toolchain | `pacman -S mingw-w64-x86_64-toolchain` |
+| NASM, Go | BoringSSL build dependencies |
+| CMake >= 3.29 | Drives the C library build |
+
+> **Note:** On Windows the JNI bridge (`http2jni.dll`) is compiled with MinGW gcc
+> (same toolchain as the C library), so it can link directly against
+> `libhttp2client.dll.a` without needing a separate MSVC import library.
+> The `gcc` command must be on PATH (run Maven from the MSYS2 MINGW64 shell,
+> or add `C:\msys64\mingw64\bin` to your system PATH).
+
 ## One-shot build (compile + package + test)
+
+**macOS / Linux:**
 
 ```bash
 cd java
 bash build.sh
+```
+
+**Windows (MSYS2 MINGW64 shell):**
+
+```bash
+cd /e/Files/HTTP-Request-Client/java
+mvn clean package
+java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
 ```
 
 `build.sh` only performs environment checks (C library, Java, Maven), invokes
@@ -103,13 +155,18 @@ http2-client-1.0.0.jar
 ├── Test.class
 ├── org/json/*.class        # JSON dependency (inlined)
 └── native/
-    ├── libhttp2client.dylib  # C core library
-    └── libhttp2jni.dylib     # JNI bridge library
+    ├── libhttp2client.{dylib|so|dll}  # C core library
+    └── libhttp2jni.{dylib|so}         # JNI bridge (macOS/Linux)
+        http2jni.dll                   # JNI bridge (Windows)
 ```
 
-At runtime `Http2Client.java` automatically extracts the `.dylib` files from
-`/native/` inside the JAR to a temp directory (`$TMPDIR/http2client-native/`)
-and loads them via `System.load()`.
+At runtime `Http2Client.java` automatically extracts the native libraries from
+`/native/` inside the JAR to a temp directory and loads them via `System.load()`.
+
+> **Windows note:** `http2jni.dll` depends on `libhttp2client.dll` and MinGW
+> runtime DLLs (`libwinpthread-1.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll`).
+> Ensure `C:\msys64\mingw64\bin` is on your system PATH, or copy those DLLs
+> next to the extracted files.
 
 ## Build artifacts
 

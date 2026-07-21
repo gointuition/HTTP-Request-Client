@@ -22,14 +22,18 @@ echo "Project root: $PROJECT_ROOT"
 echo "Java binding directory: $SCRIPT_DIR"
 
 # Check if the prebuilt native C library exists
-LIB_NAME="libhttp2client.dylib"
-if [ "$(uname)" = "Linux" ]; then
-    LIB_NAME="libhttp2client.so"
-fi
+OS_NAME="$(uname)"
+case "$OS_NAME" in
+    Darwin)  LIB_NAME="libhttp2client.dylib" ;;
+    Linux)   LIB_NAME="libhttp2client.so" ;;
+    MINGW*|MSYS*|CYGWIN*)  LIB_NAME="libhttp2client.dll" ;;
+    *)       LIB_NAME="libhttp2client.so" ;;
+esac
 
 if [ ! -f "$PROJECT_ROOT/lib/shared/$LIB_NAME" ]; then
     echo "Error: $LIB_NAME not found. Please build the shared library first."
-    echo "Run: cd $PROJECT_ROOT && mkdir -p build && cd build && cmake .. && make"
+    echo "  macOS/Linux: cd $PROJECT_ROOT && cmake -B build && cmake --build build -j\$(nproc)"
+    echo "  Windows:     cd $PROJECT_ROOT && cmake -B build -G 'MinGW Makefiles' && cmake --build build -j4"
     exit 1
 fi
 
@@ -39,8 +43,9 @@ echo "Shared library found: $PROJECT_ROOT/lib/shared/$LIB_NAME"
 # Check Java
 echo ""
 JAVA_VERSION_OUTPUT="$(java -version 2>&1)" || {
-    echo "Error: Java not found. Install with: brew install openjdk"
-    echo "Then add to PATH: export PATH=\"/opt/homebrew/opt/openjdk/bin:\$PATH\""
+    echo "Error: Java not found."
+    echo "  macOS:   brew install openjdk"
+    echo "  Windows: install Eclipse Temurin JDK and add to PATH"
     exit 1
 }
 echo "Java version:"
@@ -64,17 +69,46 @@ if [ "$JAVA_MAJOR" -ge 16 ] 2>/dev/null; then
 fi
 
 # Determine JAVA_HOME (Maven and the JNI header path both rely on a JDK)
-JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home 2>/dev/null || echo "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home")}"
+if [ -z "$JAVA_HOME" ]; then
+    case "$OS_NAME" in
+        Darwin)
+            JAVA_HOME="$(/usr/libexec/java_home 2>/dev/null || echo "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home")"
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            # On Windows, derive from 'java' on PATH (resolve symlinks)
+            JAVA_EXE="$(which java 2>/dev/null)"
+            if [ -n "$JAVA_EXE" ]; then
+                # java.exe is in JAVA_HOME/bin/java.exe
+                JAVA_HOME="$(cd "$(dirname "$JAVA_EXE")/.." && pwd -W 2>/dev/null || cd "$(dirname "$JAVA_EXE")/.." && pwd)"
+            fi
+            ;;
+        *)
+            # Linux: try common locations
+            JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(which java)")")")"
+            ;;
+    esac
+fi
 export JAVA_HOME
 echo "JAVA_HOME: $JAVA_HOME"
 
 # Check Maven
 echo ""
 if ! command -v mvn >/dev/null 2>&1; then
-    echo "Error: Maven (mvn) not found. Install with: brew install maven"
+    echo "Error: Maven (mvn) not found."
+    echo "  macOS:   brew install maven"
+    echo "  Windows: download from https://maven.apache.org/download.cgi and add bin/ to PATH"
     exit 1
 fi
 mvn -version 2>&1 | head -1
+
+# On Windows (MSYS2), verify gcc is available for JNI bridge compilation
+if [[ "$OS_NAME" == MINGW* || "$OS_NAME" == MSYS* ]]; then
+    if ! command -v gcc >/dev/null 2>&1; then
+        echo "Error: gcc not found. Run this script from the MSYS2 MINGW64 shell,"
+        echo "or add C:\\msys64\\mingw64\\bin to your PATH."
+        exit 1
+    fi
+fi
 
 VERSION="1.0.0"
 JAR_NAME="http2-client-${VERSION}.jar"
