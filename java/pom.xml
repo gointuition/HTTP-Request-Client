@@ -90,6 +90,9 @@
                 <!-- Windows has no rpath; use -static-libgcc to embed GCC runtime
                      into the JNI DLL, reducing external MinGW dependencies. -->
                 <jni.rpath>-static-libgcc</jni.rpath>
+                <!-- Default to MSVC on Windows; override with -Djni.compiler=gcc for MinGW -->
+                <jni.compiler>msvc</jni.compiler>
+                <msvc.libpath>${native.lib.dir}</msvc.libpath>
             </properties>
         </profile>
     </profiles>
@@ -115,11 +118,24 @@
                 </configuration>
             </plugin>
 
-            <!-- 2. Compile JNI C bridge (gcc) and stage native libraries -->
+            <!-- 2. Compile JNI C bridge (gcc or MSVC cl.exe) and stage native libraries -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-antrun-plugin</artifactId>
                 <version>3.1.0</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>ant-contrib</groupId>
+                        <artifactId>ant-contrib</artifactId>
+                        <version>1.0b3</version>
+                        <exclusions>
+                            <exclusion>
+                                <groupId>ant</groupId>
+                                <artifactId>ant</artifactId>
+                            </exclusion>
+                        </exclusions>
+                    </dependency>
+                </dependencies>
                 <executions>
                     <execution>
                         <id>compile-jni</id>
@@ -129,6 +145,8 @@
                         </goals>
                         <configuration>
                             <target>
+                                <taskdef resource="net/sf/antcontrib/antcontrib.properties"/>
+
                                 <!-- javac -h emits Http2Client.h; the C bridge
                                      includes it as Http2Client_jni.h to avoid
                                      clashing with the project's own header. -->
@@ -138,25 +156,58 @@
 
                                 <mkdir dir="${project.build.outputDirectory}/native"/>
 
-                                <!-- gcc -shared -> libhttp2jni.(dylib|so)
-                                     NOTE: the source object must precede -lhttp2client.
-                                     On Linux gcc defaults to as-needed linking, so a
-                                     library listed before the object that references it
-                                     gets its DT_NEEDED dropped, leaving libhttp2jni with
-                                     an unresolved `initialiseEnv` at load time. -->
-                                <exec executable="gcc" failonerror="true">
-                                    <arg value="-shared"/>
-                                    <arg value="-fPIC"/>
-                                    <arg value="-I${java.home}/include"/>
-                                    <arg value="-I${java.home}/include/${jni.os.include}"/>
-                                    <arg value="-I${project.basedir}"/>
-                                    <arg value="${jni.rpath}"/>
-                                    <arg value="-o"/>
-                                    <arg value="${project.build.outputDirectory}/native/${jni.lib.name}"/>
-                                    <arg value="${project.basedir}/Http2Client.c"/>
-                                    <arg value="-L${native.lib.dir}"/>
-                                    <arg value="-lhttp2client"/>
-                                </exec>
+                                <property name="jni.compiler" value="gcc"/>
+
+                                <if>
+                                    <equals arg1="${jni.compiler}" arg2="msvc"/>
+                                    <then>
+                                        <!-- MSVC cl.exe -> http2jni.dll
+                                             Requires http2client.lib (generated from
+                                             libhttp2client.dll via gendef + lib.exe). -->
+                                        <available file="${native.lib.dir}/http2client.lib"
+                                                   property="msvc.lib.exists"/>
+                                        <if>
+                                            <not><isset property="msvc.lib.exists"/></not>
+                                            <then>
+                                                <fail message="http2client.lib not found in ${native.lib.dir}. Generate it: gendef libhttp2client.dll &amp;&amp; lib /def:libhttp2client.def /out:http2client.lib /machine:x64"/>
+                                            </then>
+                                        </if>
+                                        <exec executable="cl" failonerror="true">
+                                            <arg value="/nologo"/>
+                                            <arg value="/LD"/>
+                                            <arg value="/O2"/>
+                                            <arg value="/I${java.home}/include"/>
+                                            <arg value="/I${java.home}/include/${jni.os.include}"/>
+                                            <arg value="/I${project.basedir}"/>
+                                            <arg value="/Fe${project.build.outputDirectory}/native/${jni.lib.name}"/>
+                                            <arg value="${project.basedir}/Http2Client.c"/>
+                                            <arg value="/link"/>
+                                            <arg value="/LIBPATH:${msvc.libpath}"/>
+                                            <arg value="http2client.lib"/>
+                                        </exec>
+                                    </then>
+                                    <else>
+                                        <!-- gcc -shared -> libhttp2jni.(dylib|so|dll)
+                                             NOTE: the source object must precede -lhttp2client.
+                                             On Linux gcc defaults to as-needed linking, so a
+                                             library listed before the object that references it
+                                             gets its DT_NEEDED dropped, leaving libhttp2jni with
+                                             an unresolved `initialiseEnv` at load time. -->
+                                        <exec executable="gcc" failonerror="true">
+                                            <arg value="-shared"/>
+                                            <arg value="-fPIC"/>
+                                            <arg value="-I${java.home}/include"/>
+                                            <arg value="-I${java.home}/include/${jni.os.include}"/>
+                                            <arg value="-I${project.basedir}"/>
+                                            <arg value="${jni.rpath}"/>
+                                            <arg value="-o"/>
+                                            <arg value="${project.build.outputDirectory}/native/${jni.lib.name}"/>
+                                            <arg value="${project.basedir}/Http2Client.c"/>
+                                            <arg value="-L${native.lib.dir}"/>
+                                            <arg value="-lhttp2client"/>
+                                        </exec>
+                                    </else>
+                                </if>
 
                                 <!-- Bundle the prebuilt native C library too -->
                                 <copy file="${native.lib.dir}/${client.lib.name}"
