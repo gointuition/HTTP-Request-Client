@@ -32,7 +32,8 @@ public class Test {
     public static void main(String[] args) {
         System.out.println("=== HTTP/2 Client Test ===\n");
 
-        String projectRoot = System.getProperty("user.dir").replace("/java", "");
+        String projectRoot = System.getProperty("user.dir")
+                .replace("/java", "").replace("\\java", "");
 
         // Init
         System.out.println("[Init] Initializing HTTP/2 client...");

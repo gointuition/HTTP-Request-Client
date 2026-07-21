@@ -46,7 +46,8 @@ public class Example {
     public static void main(String[] args) {
         System.out.println("HTTP/2 Client Example\n");
 
-        String projectRoot = System.getProperty("user.dir").replace("/java", "");
+        String projectRoot = System.getProperty("user.dir")
+                .replace("/java", "").replace("\\java", "");
 
         // Example 1: Simple GET request
         System.out.println("Example 1: GET request");
