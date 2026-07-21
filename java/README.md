@@ -16,7 +16,7 @@ Output: `lib/shared/libhttp2client.dylib` (macOS) or `lib/shared/libhttp2client.
 **Windows (MSYS2 MINGW64 shell):**
 
 ```bash
-cd /e/Files/HTTP-Request-Client
+cd <project_root>
 cmake -B build -G "MinGW Makefiles"
 cmake --build build -j4
 ```
@@ -67,11 +67,14 @@ mvn -version
 | NASM, Go | BoringSSL build dependencies |
 | CMake >= 3.29 | Drives the C library build |
 
-> **Note:** On Windows the JNI bridge (`http2jni.dll`) is compiled with MinGW gcc
-> (same toolchain as the C library), so it can link directly against
-> `libhttp2client.dll.a` without needing a separate MSVC import library.
-> The `gcc` command must be on PATH (run Maven from the MSYS2 MINGW64 shell,
-> or add `C:\msys64\mingw64\bin` to your system PATH).
+> **Note:** On Windows the JNI bridge (`libhttp2jni.dll`) supports two compilers:
+>
+> | Compiler | Command | Requirements |
+> |----------|---------|-------------|
+> | MSVC `cl.exe` (default) | `mvn clean package` | Run from "x64 Native Tools Command Prompt for VS 2022"; requires `http2client.lib` in `lib/shared/` |
+> | MinGW `gcc` | `mvn clean package -Djni.compiler=gcc` | `gcc` on PATH (add `C:\msys64\mingw64\bin`) |
+>
+> Using MinGW gcc links directly against `libhttp2client.dll.a`, no import library needed.
 
 ## One-shot build (compile + package + test)
 
@@ -82,13 +85,26 @@ cd java
 bash build.sh
 ```
 
+**Windows (PowerShell, with MinGW on PATH):**
+
+```powershell
+cd <project_root>\java
+$env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
+mvn clean package "-Djni.compiler=gcc"
+java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
+```
+
 **Windows (MSYS2 MINGW64 shell):**
 
 ```bash
-cd /e/Files/HTTP-Request-Client/java
-mvn clean package
+cd <project_root>/java
+export MSYS2_ARG_CONV_EXCL="*"
+mvn clean package -Djni.compiler=gcc
 java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
 ```
+
+> In MINGW64 shell, `export MSYS2_ARG_CONV_EXCL="*"` is required to prevent
+> MSYS2 from mangling Maven `-D` arguments.
 
 `build.sh` only performs environment checks (C library, Java, Maven), invokes
 `mvn clean package`, then runs the test. All actual build steps live in `pom.xml`.
@@ -114,12 +130,13 @@ mvn exec:java -Dexec.mainClass=Example
 | Phase | Plugin | Purpose |
 |-------|--------|---------|
 | `compile` | `maven-compiler-plugin` | Compile `*.java` and generate the JNI header via `javac -h` into `build/generated-jni/` |
-| `process-classes` | `maven-antrun-plugin` | Copy the generated header to `Http2Client_jni.h`; compile the JNI bridge with `gcc`; copy native libs into `build/classes/native/` |
+| `process-classes` | `maven-antrun-plugin` | Copy the generated header to `Http2Client_jni.h`; compile the JNI bridge with `gcc` or MSVC `cl.exe` (via `-Djni.compiler`); copy native libs into `build/classes/native/` |
 | `package` | `maven-shade-plugin` | Build the fat JAR (classes + `org.json` dependency + `native/` libraries) |
 
 - `org.json` is resolved as a standard Maven dependency (no manual `lib/*.jar` needed).
-- OS-specific settings (`.dylib`/`.so`, include dir, rpath) are selected automatically by `<profiles>` for macOS / Linux.
-- The JNI bridge rpath is set to `@loader_path` (macOS) because both `.dylib` files are extracted to the same temp directory at runtime.
+- OS-specific settings (`.dylib`/`.so`/`.dll`, include dir, rpath) are selected automatically by `<profiles>` for macOS / Linux / Windows.
+- The JNI bridge rpath is set to `@loader_path` (macOS) / `$ORIGIN` (Linux) because both native files are extracted to the same temp directory at runtime.
+- On Windows, `-Djni.compiler=gcc` selects MinGW; default is MSVC `cl.exe`.
 
 ## Usage
 
@@ -131,10 +148,15 @@ java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
 java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Example
 ```
 
-> The `--enable-native-access=ALL-UNNAMED` flag applies only to **JDK 16+** (JEP 389).
-> On JDK 24+ (JEP 472) it also suppresses the native-access warning. Omit it on
-> older JDKs (< 16), which reject it as an unrecognized option. `build.sh` detects
-> the Java major version and adds the flag automatically only when supported.
+> **`--enable-native-access=ALL-UNNAMED` 版本说明：**
+>
+> | JDK 版本 | 行为 |
+> |----------|------|
+> | < 16 | 不支持此参数，使用会报 `Unrecognized option` 错误，**必须省略** |
+> | 16 – 23 | 参数已引入（JEP 389），但 JNI 调用不受限制，加不加均可正常运行 |
+> | 24+ | JEP 472 生效：未加此参数时，JNI 调用会打印警告（未来版本将变为错误）；加上后警告消除 |
+>
+> `build.sh` 会自动检测 Java 主版本号，仅在 >= 16 时添加此参数。
 
 ### Calling from Java code
 
@@ -156,14 +178,13 @@ http2-client-1.0.0.jar
 ├── org/json/*.class        # JSON dependency (inlined)
 └── native/
     ├── libhttp2client.{dylib|so|dll}  # C core library
-    └── libhttp2jni.{dylib|so}         # JNI bridge (macOS/Linux)
-        http2jni.dll                   # JNI bridge (Windows)
+    └── libhttp2jni.{dylib|so|dll}     # JNI bridge
 ```
 
 At runtime `Http2Client.java` automatically extracts the native libraries from
 `/native/` inside the JAR to a temp directory and loads them via `System.load()`.
 
-> **Windows note:** `http2jni.dll` depends on `libhttp2client.dll` and MinGW
+> **Windows note:** `libhttp2jni.dll` depends on `libhttp2client.dll` and MinGW
 > runtime DLLs (`libwinpthread-1.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll`).
 > Ensure `C:\msys64\mingw64\bin` is on your system PATH, or copy those DLLs
 > next to the extracted files.
