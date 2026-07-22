@@ -1,7 +1,6 @@
 #include <node_api.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 // Forward-declare the C library API directly to avoid pulling in the full
 // header chain (Basket.h -> pthread.h, openssl/ssl.h, ...) which requires
@@ -73,9 +72,6 @@ napi_value HandleRequest(napi_env env, napi_callback_info info) {
         return nullptr;
     }
 
-    fprintf(stderr, "[DEBUG] JSON length: %zu\n", jsonLength);
-    fflush(stderr);
-
     // Allocate and copy JSON string
     char *jsonStr = (char *)malloc(jsonLength + 1);
     if (!jsonStr) {
@@ -92,21 +88,11 @@ napi_value HandleRequest(napi_env env, napi_callback_info info) {
     }
     jsonStr[jsonLength] = '\0';
 
-    fprintf(stderr, "[DEBUG] JSON copied: %.50s...\n", jsonStr);
-    fflush(stderr);
-
     // Ensure environment is initialized (lazy initialization)
     if (!envInitialized) {
-        fprintf(stderr, "[DEBUG] Auto-initializing environment...\n");
-        fflush(stderr);
         initialiseEnv();
         envInitialized = 1;
-        fprintf(stderr, "[DEBUG] Environment initialized\n");
-        fflush(stderr);
     }
-
-    fprintf(stderr, "[DEBUG] Calling handleRequest()...\n");
-    fflush(stderr);
 
     char *resultBuffer = nullptr;
     int actualRet = 0;
@@ -145,9 +131,6 @@ napi_value HandleRequest(napi_env env, napi_callback_info info) {
  * Module initialization - DO NOT call initialiseEnv here
  */
 napi_value Init(napi_env env, napi_value exports) {
-    fprintf(stderr, "[DEBUG] Module loaded\n");
-    fflush(stderr);
-
     napi_property_descriptor desc[] = {
             {"initEnv", nullptr, InitEnv, nullptr, nullptr, nullptr, napi_default, nullptr},
             {"cleanupEnv", nullptr, CleanupEnv, nullptr, nullptr, nullptr, napi_default, nullptr},

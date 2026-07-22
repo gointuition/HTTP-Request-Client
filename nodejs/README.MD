@@ -39,7 +39,7 @@ On Windows the project uses a **split toolchain**:
 **Step 1 — Build the C library** (MSYS2 MINGW64 shell):
 
 ```bash
-cd /e/Files/HTTP-Request-Client
+cd <project_root>
 cmake -B build -G "MinGW Makefiles"
 cmake --build build -j4
 ```

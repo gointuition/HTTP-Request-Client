@@ -67,8 +67,6 @@ if (process.platform === 'win32') {
   }
 
   if (!fs.existsSync(lib)) {
-    console.log('build-addon: generating http2client.lib from libhttp2client.dll ...')
-
     // Step 1: gendef (from MSYS2/MinGW) extracts exported symbols into a .def
     const defFile = path.join(libDir, 'libhttp2client.def')
     const gendef = spawnSync('gendef', [dll], { cwd: libDir, stdio: 'inherit', env })
@@ -86,7 +84,6 @@ if (process.platform === 'win32') {
         'from a "x64 Native Tools Command Prompt".')
       process.exit(1)
     }
-    console.log('build-addon: using ' + libExePath)
     const libExe = spawnSync(libExePath, [
       '/def:' + defFile,
       '/out:' + lib,
@@ -99,7 +96,6 @@ if (process.platform === 'win32') {
 
     // Clean up intermediate .def file
     try { fs.unlinkSync(defFile) } catch (_) { /* ignore */ }
-    console.log('build-addon: generated ' + lib)
   }
 }
 
@@ -129,7 +125,6 @@ if (process.platform === 'win32') {
   const destDir = path.join(__dirname, 'build', 'Release')
   fs.mkdirSync(destDir, { recursive: true })
   fs.copyFileSync(dll, path.join(destDir, 'libhttp2client.dll'))
-  console.log('build-addon: copied libhttp2client.dll -> ' + destDir)
 
   // zlib is statically linked into libhttp2client.dll (see CMakeLists.txt),
   // so no external zlib DLL is needed at runtime.
@@ -151,7 +146,6 @@ if (process.platform === 'win32') {
       const src = path.join(mingwBin, rt)
       if (fs.existsSync(src)) {
         fs.copyFileSync(src, path.join(destDir, rt))
-        console.log('build-addon: copied ' + rt + ' -> ' + destDir)
       }
     }
   } else {

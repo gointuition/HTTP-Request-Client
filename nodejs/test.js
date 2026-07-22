@@ -54,7 +54,6 @@ async function runTests() {
         console.log(`✓ URL: ${result.url || 'N/A'}`);
 
         console.log(JSON.parse(result));
-        console.log(JSON.parse(result).response.payload);
     } catch (error) {
         console.error(`✗ Failed: ${error.message}`);
         console.error(error.stack);
