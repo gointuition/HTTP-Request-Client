@@ -19,41 +19,49 @@ int main(int argc, char *argv[]) {
 
 //    printf("[DEBUG] basket json\n%s\n", requestStr);
 
-    size_t basketStrLen = 1024 * 1024;
-    char *basketStr = malloc(basketStrLen);
-    if (!basketStr) {
-        LOG("ERROR", "failed to allocate memory");
-        cleanupEnv();
-        return EXIT_FAILURE;
-    }
-
-//    int actualLen = handleRequest(HTTP_REQUEST_JSON, basketStr, basketStrLen);
-    int actualLen = handleRequest(requestStr, basketStr, basketStrLen);
-    if (actualLen > 0) {
+    // step 1: get the result pointer and length
+    int actualLen = 0;
+    char *result = handleRequest(requestStr, &actualLen);
+    if (result != NULL && actualLen > 0) {
         LOG("DEBUG", "basket json string length %d", actualLen);
+
+        // step 2: allocate exact space and get content
+        char *basketStr = malloc(actualLen + 1);
+        if (!basketStr) {
+            LOG("ERROR", "failed to allocate memory");
+            free(result);
+            cleanupEnv();
+            return EXIT_FAILURE;
+        }
+        getBasketContent(result, basketStr);
         LOG("DEBUG", "basket json %s", basketStr);
+        free(basketStr);
     } else {
-        LOG("ERROR", "failed to handle request %d", actualLen);
+        LOG("ERROR", "failed to handle request");
     }
-    free(basketStr);
 
 //    sleep(5);
 
-    basketStr = malloc(basketStrLen);
-    if (!basketStr) {
-        LOG("ERROR", "failed to allocate memory");
-        cleanupEnv();
-        return EXIT_FAILURE;
-    }
-//    actualLen = handleRequest(HTTP_REQUEST_JSON, basketStr, basketStrLen);
-    actualLen = handleRequest(requestStr, basketStr, basketStrLen);
-    if (actualLen > 0) {
+    // step 1: get the result pointer and length
+    actualLen = 0;
+    result = handleRequest(requestStr, &actualLen);
+    if (result != NULL && actualLen > 0) {
         LOG("DEBUG", "basket json string length %d", actualLen);
+
+        // step 2: allocate exact space and get content
+        char *basketStr = malloc(actualLen + 1);
+        if (!basketStr) {
+            LOG("ERROR", "failed to allocate memory");
+            free(result);
+            cleanupEnv();
+            return EXIT_FAILURE;
+        }
+        getBasketContent(result, basketStr);
         LOG("DEBUG", "basket json %s", basketStr);
+        free(basketStr);
     } else {
-        LOG("ERROR", "failed to handle request %d", actualLen);
+        LOG("ERROR", "failed to handle request");
     }
-    free(basketStr);
     free(requestStr);
 
     cleanupEnv();

@@ -137,7 +137,7 @@ Basket* buildBasket(const char *requestString);
 
 void freeBasket(Basket *basket);
 
-int basketToString(Basket *basket, char *basketJSONString, size_t basketStrLen);
+char* basketToString(Basket *basket, int *outLen);
 
 const char * getUserAgent(Basket *basket);
 

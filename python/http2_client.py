@@ -20,8 +20,8 @@ ffi = FFI()
 ffi.cdef("""
     void initialiseEnv(void);
     void cleanupEnv(void);
-    int handleRequest(const char *requestJSONString, char *basketStr, size_t basketStrLen);
-    void freeBasketString(char *basketStr);
+    char* handleRequest(const char *requestJSONString, int *outLen);
+    void getBasketContent(char *basketStr, char *dest);
 """)
 
 
@@ -84,7 +84,6 @@ class HttpClient:
     def __init__(self):
         self._initialized = False
         self._lib = None
-        self._buffer_size = 1024 * 1024  # 1 MB, same as nodejs addon
 
     def _load_library(self):
         """Load the native library via cffi dlopen."""
@@ -129,18 +128,20 @@ class HttpClient:
         # Encode to bytes for cffi
         request_bytes = json_str.encode("utf-8")
 
-        # Allocate result buffer via cffi
-        buffer = ffi.new("char[]", self._buffer_size)
+        # Step 1: call handleRequest to get the result pointer and length
+        out_len = ffi.new("int *")
+        result = self._lib.handleRequest(request_bytes, out_len)
+        actual_len = out_len[0]
 
-        # Call native handleRequest
-        actual_len = self._lib.handleRequest(request_bytes, buffer, self._buffer_size)
-
-        if actual_len > 0:
+        if result != ffi.NULL and actual_len > 0:
+            # Step 2: allocate exact buffer and get content (getBasketContent frees result)
+            buffer = ffi.new("char[]", actual_len + 1)
+            self._lib.getBasketContent(result, buffer)
             # ffi.string reads up to NUL or specified length
             result_bytes = ffi.buffer(buffer, actual_len)[:]
             return result_bytes.decode("utf-8")
         else:
-            raise RuntimeError(f"handleRequest failed with return code: {actual_len}")
+            raise RuntimeError(f"handleRequest failed")
 
     def cleanup(self):
         """Cleanup resources."""

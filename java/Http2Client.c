@@ -23,7 +23,8 @@
  */
 extern void initialiseEnv(void);
 extern void cleanupEnv(void);
-extern int handleRequest(const char *requestJSONString, char *basketStr, size_t basketStrLen);
+extern char* handleRequest(const char *requestJSONString, int *outLen);
+extern void getBasketContent(char *basketStr, char *dest);
 
 /* Buffer size must match Http2Client.java BUFFER_SIZE (1 MB) */
 #define BRIDGE_BUFFER_SIZE (1024 * 1024)
@@ -55,15 +56,17 @@ JNIEXPORT jstring JNICALL Java_Http2Client_nativeRequest(JNIEnv *env, jclass cls
         return NULL; /* OutOfMemoryError already thrown by JVM */
     }
 
-    int actualLen = handleRequest(requestStr, g_buffer, BRIDGE_BUFFER_SIZE);
+    int actualLen = 0;
+    char *result = handleRequest(requestStr, &actualLen);
 
     (*env)->ReleaseStringUTFChars(env, requestJson, requestStr);
 
-    if (actualLen > 0) {
+    if (result != NULL && actualLen > 0) {
         /* Ensure null-termination for NewStringUTF */
         if (actualLen >= BRIDGE_BUFFER_SIZE) {
             actualLen = BRIDGE_BUFFER_SIZE - 1;
         }
+        getBasketContent(result, g_buffer);
         g_buffer[actualLen] = '\0';
         return (*env)->NewStringUTF(env, g_buffer);
     }

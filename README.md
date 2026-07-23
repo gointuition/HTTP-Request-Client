@@ -142,14 +142,17 @@ This produces:
 // 1. Initialize (call once at startup)
 void initialiseEnv(void);
 
-// 2. Send request
+// 2. Send request (two-step, thread-safe)
+//    Step 1: get result pointer and length
 //    requestJSONString: JSON config (see format below)
-//    basketJSONString: output buffer for response JSON
-//    basketStrLen:     buffer size
-//    Returns: actual response length, or <= 0 on error
-int handleRequest(const char *requestJSONString,
-                  char *basketJSONString,
-                  size_t basketStrLen);
+//    outLen: output parameter for response JSON length
+//    Returns: malloc'd response JSON string, or NULL on error
+char* handleRequest(const char *requestJSONString, int *outLen);
+
+//    Step 2: copy content to your buffer (frees the source pointer)
+//    basketStr: pointer returned by handleRequest
+//    dest:      caller-allocated buffer (at least outLen + 1 bytes)
+void getBasketContent(char *basketStr, char *dest);
 
 // 3. Cleanup (call once at shutdown)
 void cleanupEnv(void);
@@ -193,15 +196,17 @@ int main() {
         "  \"session\": { \"expirationInMilliseconds\": 300000 }"\n"
         "}";
 
-    size_t bufLen = 1024 * 1024; // 1 MB
-    char *buf = malloc(bufLen);
-
-    int len = handleRequest(request, buf, bufLen);
-    if (len > 0) {
+    // Step 1: get result pointer and length
+    int len = 0;
+    char *result = handleRequest(request, &len);
+    if (result != NULL && len > 0) {
+        // Step 2: allocate exact buffer, copy content (frees result internally)
+        char *buf = malloc(len + 1);
+        getBasketContent(result, buf);
         printf("%s\n", buf);
+        free(buf);
     }
 
-    free(buf);
     cleanupEnv();
     return 0;
 }

@@ -103,7 +103,7 @@ void cleanupEnv(void) {
 //    return 1;
 //}
 
-int handleRequest(const char *requestJSONString, char *basketJSONString, size_t basketStrLen) {
+char* handleRequest(const char *requestJSONString, int *outLen) {
     // 1. prepare request
     Basket *basket = buildBasket(requestJSONString);
     if (basket != NULL && basket -> error.code == NULL) {
@@ -138,9 +138,9 @@ int handleRequest(const char *requestJSONString, char *basketJSONString, size_t 
         }
     }
 
-    int written = basketToString(basket, basketJSONString, basketStrLen);
+    char *result = basketToString(basket, outLen);
     freeBasket(basket);
-    return written;
+    return result;
 }
 
 static void sendRequest(Basket *basket) {
@@ -157,9 +157,9 @@ static void sendRequest(Basket *basket) {
     }
 }
 
-void freeBasketString(char *basketStr) {
-    if (basketStr != NULL) {
+void getBasketContent(char *basketStr, char *dest) {
+    if (basketStr != NULL && dest != NULL) {
+        strcpy(dest, basketStr);
         free(basketStr);
-        LOG("DEBUG", "basket string freed");
     }
 }

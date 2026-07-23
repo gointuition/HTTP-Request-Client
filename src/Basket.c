@@ -4,6 +4,7 @@
 
 #include "Basket.h"
 
+#include <string.h>
 #include <strings.h>
 
 #include "Log.h"
@@ -403,7 +404,7 @@ void freeBasket(Basket *basket) {
     LOG("DEBUG", "free basket");
 }
 
-int basketToString(Basket *basket, char *basketJSONString, size_t basketStrLen) {
+char* basketToString(Basket *basket, int *outLen) {
     json_t *root = json_object();
 
     // url
@@ -485,9 +486,10 @@ int basketToString(Basket *basket, char *basketJSONString, size_t basketStrLen) 
     char *tempStr = json_dumps(root, flags);
     json_decref(root);
 
-    int written = snprintf(basketJSONString, basketStrLen, "%s", tempStr);
-    free(tempStr);
-    return written;
+    if (outLen != NULL) {
+        *outLen = (tempStr != NULL) ? (int) strlen(tempStr) : 0;
+    }
+    return tempStr;
 }
 
 const char * getUserAgent(Basket *basket) {

@@ -43,9 +43,9 @@ void cleanupEnv(void);
 
 int connectTo(const char *hostname, const char *port);
 
-int handleRequest(const char *requestJSONString, char *basketStr, size_t basketStrLen);
+char* handleRequest(const char *requestJSONString, int *outLen);
 
-void freeBasketString(char *basketStr);
+void getBasketContent(char *basketStr, char *dest);
 
 #ifdef __cplusplus
 }

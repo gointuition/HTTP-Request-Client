@@ -9,7 +9,8 @@
 extern "C" {
     void initialiseEnv(void);
     void cleanupEnv(void);
-    int handleRequest(const char *requestJSONString, char *basketStr, size_t basketStrLen);
+    char* handleRequest(const char *requestJSONString, int *outLen);
+    void getBasketContent(char *basketStr, char *dest);
 }
 
 // Global initialization flag
@@ -97,14 +98,7 @@ napi_value HandleRequest(napi_env env, napi_callback_info info) {
     char *resultBuffer = nullptr;
     int actualRet = 0;
 
-    size_t bufferSize = 1024 * 1024;
-    resultBuffer = (char *)malloc(bufferSize);
-    if (!resultBuffer) {
-        free(jsonStr);
-        napi_throw_error(env, "ERR_NO_MEMORY", "Memory allocation failed");
-        return nullptr;
-    }
-    actualRet = handleRequest(jsonStr, resultBuffer, bufferSize);
+    char *result = handleRequest(jsonStr, &actualRet);
 
     free(jsonStr);
 
@@ -112,15 +106,23 @@ napi_value HandleRequest(napi_env env, napi_callback_info info) {
     napi_value resultObj;
     napi_create_object(env, &resultObj);
 
-    if (actualRet > 0) {
+    if (result != nullptr && actualRet > 0) {
+        // Allocate exact buffer and get content (getBasketContent frees result)
+        resultBuffer = (char *)malloc(actualRet + 1);
+        if (!resultBuffer) {
+            free(result);
+            napi_throw_error(env, "ERR_NO_MEMORY", "Memory allocation failed");
+            return nullptr;
+        }
+        getBasketContent(result, resultBuffer);
+        resultBuffer[actualRet] = '\0';
+
         // Success case
         napi_value dataValue;
 
         napi_create_string_utf8(env, resultBuffer, (size_t)actualRet, &dataValue);
         napi_set_named_property(env, resultObj, "data", dataValue);
-    }
 
-    if (resultBuffer) {
         free(resultBuffer);
     }
 
