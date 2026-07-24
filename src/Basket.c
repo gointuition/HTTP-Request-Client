@@ -455,13 +455,41 @@ char* basketToString(Basket *basket, int *outLen) {
     // response
     json_t *response = json_object();
 
-    json_t *responseHeaders = json_array();
-    if (basket -> response.headers != NULL) {
-        for (size_t i = 0; i < basket -> response.numHeaders; i++) {
-            // + 3 because of ": "
-            char headerStr[strlen(basket -> response.headers[i].name) + strlen(basket -> response.headers[i].value) + 3];
-            snprintf(headerStr, sizeof(headerStr), "%s: %s", basket -> response.headers[i].name, basket -> response.headers[i].value);
-            json_array_append_new(responseHeaders, json_string(headerStr));
+    // json_t *responseHeaders = json_array();
+    // if (basket -> response.headers != NULL) {
+    //     for (size_t i = 0; i < basket -> response.numHeaders; i++) {
+    //         // + 3 because of ": "
+    //         char headerStr[strlen(basket -> response.headers[i].name) + strlen(basket -> response.headers[i].value) + 3];
+    //         snprintf(headerStr, sizeof(headerStr), "%s: %s", basket -> response.headers[i].name, basket -> response.headers[i].value);
+    //         json_array_append_new(responseHeaders, json_string(headerStr));
+    //     }
+    // }
+    json_t *responseHeaders = json_object();
+    if (basket->response.headers != NULL) {
+        for (size_t i = 0; i < basket->response.numHeaders; i++) {
+            const char *name = basket->response.headers[i].name;
+            const char *value = basket->response.headers[i].value;
+
+            if (strcasecmp(name, "set-cookie") == 0) {
+                json_t *cookies = json_object_get(responseHeaders, "set-cookie");
+                if (!cookies) {
+                    cookies = json_array();
+                    json_object_set_new(responseHeaders, "set-cookie", cookies);
+                }
+                json_array_append_new(cookies, json_string(value));
+            } else {
+                // append if existing (RFC 2616 §4.2）
+                json_t *existing = json_object_get(responseHeaders, name);
+                if (existing) {
+                    const char *old = json_string_value(existing);
+                    size_t newLen = strlen(old) + strlen(value) + 3; // ", " + '\0'
+                    char merged[newLen];
+                    snprintf(merged, sizeof(merged), "%s, %s", old, value);
+                    json_object_set_new(responseHeaders, name, json_string(merged));
+                } else {
+                    json_object_set_new(responseHeaders, name, json_string(value));
+                }
+            }
         }
     }
     json_object_set_new(response, "headers", responseHeaders);
