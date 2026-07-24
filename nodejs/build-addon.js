@@ -66,7 +66,10 @@ if (process.platform === 'win32') {
     process.exit(1)
   }
 
-  if (!fs.existsSync(lib)) {
+  // Always regenerate the import library from the current DLL so that
+  // newly added/removed symbols are reflected (the DLL may have been rebuilt
+  // since the last addon build).
+  {
     // Step 1: gendef (from MSYS2/MinGW) extracts exported symbols into a .def
     const defFile = path.join(libDir, 'libhttp2client.def')
     const gendef = spawnSync('gendef', [dll], { cwd: libDir, stdio: 'inherit', env })
