@@ -100,6 +100,7 @@ extern const Error ERR_PROXY_SEND_CONNECT_REQUEST_FAILED;
 extern const Error ERR_PROXY_AUTHORIZATION_FAILED;
 extern const Error ERR_PROXY_UNEXPECTED_RESPONSE;
 extern const Error ERR_PROXY_SOCKET_CONNECTING_REFUSED;
+extern const Error ERR_PROXY_EMPTY_RESPONSE;
 
 
 #ifdef __cplusplus

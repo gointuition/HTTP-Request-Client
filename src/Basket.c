@@ -175,7 +175,7 @@ void initBasket(Basket * basket) {
 
     basket -> response = (Response) { 0, 0,NULL, NULL };
 
-    basket -> proxy = (Proxy) { 0, 0, 0, 0 };
+    basket -> proxy = (Proxy) { 0, 0, 0, 0, 0 };
 
     basket -> session = NULL;
 
@@ -430,6 +430,11 @@ char* basketToString(Basket *basket, int *outLen) {
         json_object_set_new(proxy, "host", json_string(basket -> proxy.host));
         json_object_set_new(proxy, "port", json_string(basket -> proxy.port));
         json_object_set_new(proxy, "authorization", json_string(basket -> proxy.authorization));
+        if (strlen(basket -> proxy.response) > 0) {
+            json_object_set_new(proxy, "response", json_string(basket -> proxy.response));
+        } else {
+            basket -> error = ERR_PROXY_EMPTY_RESPONSE;
+        }
         json_object_set_new(root, "proxy", proxy);
     }
 

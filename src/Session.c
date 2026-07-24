@@ -187,6 +187,8 @@ static void getSessionInfo(Basket * basket) {
                 // TODO lock session required or not?
                 pool.sessions[i] -> lastUsedTime = time(NULL);
                 basket -> session = pool.sessions[i];
+                strncpy(basket -> proxy.response, pool.sessions[i] -> proxy.response, sizeof(basket -> proxy.response) - 1);
+                basket -> proxy.response[sizeof(basket -> proxy.response) - 1] = '\0';
                 LOG("DEBUG", "reuse the session %s//:%s:%s#%s//:%s:%s@%s", pool.sessions[i] -> scheme, pool.sessions[i] -> host, pool.sessions[i] -> port, pool.sessions[i] -> proxy.scheme, pool.sessions[i] -> proxy.host, pool.sessions[i] -> proxy.port, pool.sessions[i] -> proxy.authorization);
                 break;
             }
@@ -316,7 +318,7 @@ static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * 
 
     session -> expirationInMilliseconds = basket -> sessionExpirationInMilliseconds;
 
-    session -> proxy = (Proxy) { 0, 0, 0, 0 };
+    session -> proxy = (Proxy) { 0, 0, 0, 0, 0 };
     strncpy(session -> proxy.scheme, basket -> proxy.scheme, sizeof(session -> proxy.scheme) - 1);
     session -> proxy.scheme[sizeof(session -> proxy.scheme) - 1] = '\0';
     strncpy(session -> proxy.host, basket -> proxy.host, sizeof(session -> proxy.host) - 1);
@@ -325,6 +327,8 @@ static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * 
     session -> proxy.port[sizeof(session -> proxy.port) - 1] = '\0';
     strncpy(session -> proxy.authorization, basket -> proxy.authorization, sizeof(session -> proxy.authorization) - 1);
     session -> proxy.authorization[sizeof(session -> proxy.authorization) - 1] = '\0';
+    strncpy(session -> proxy.response, basket -> proxy.response, sizeof(session -> proxy.response) - 1);
+    session -> proxy.response[sizeof(session -> proxy.response) - 1] = '\0';
 
     session -> hpackCtx = initHpackContext(basket);
     session -> connInfo = connInfo; // ownership transferred from createSession

@@ -80,6 +80,7 @@ typedef struct {
     char                host[256];
     char                port[8];
     char                authorization[1024];
+    char                response[1024];
 } Proxy;
 
 // Hpack dynamic table

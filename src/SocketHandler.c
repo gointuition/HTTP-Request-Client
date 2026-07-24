@@ -132,7 +132,9 @@ static int connectToProxy(Basket *basket, int sockfd) {
     }
 
     proxyResponse[bytesRead] = '\0';
-//    LOG("DEBUG", "proxy response: %s", proxyResponse);
+    strncpy(basket -> proxy.response, proxyResponse, sizeof(basket -> proxy.response) - 1);
+    basket -> proxy.response[sizeof(basket -> proxy.response) - 1] = '\0';
+    LOG("DEBUG", "proxy response: %s", proxyResponse);
     LOG("DEBUG", "proxy response size: %zu", bytesRead);
 
     // check proxy response
