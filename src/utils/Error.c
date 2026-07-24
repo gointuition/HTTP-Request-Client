@@ -80,4 +80,4 @@ const Error ERR_PROXY_SEND_CONNECT_REQUEST_FAILED                   = { "4-0008"
 const Error ERR_PROXY_AUTHORIZATION_FAILED                          = { "4-0009", "Proxy authorization failed (407)."};
 const Error ERR_PROXY_UNEXPECTED_RESPONSE                           = { "4-0010", "Proxy unexpected CONNECT response."};
 const Error ERR_PROXY_SOCKET_CONNECTING_REFUSED                     = { "4-0011", "Proxy socket connection refused."};
-const Error ERR_PROXY_EMPTY_RESPONSE                                = { "4-0012", "Proxy response is empty."};
+const Error ERR_PROXY_EMPTY_RESPONSE                                = { "4-0012", "Proxy response is empty but request succeeded."};
