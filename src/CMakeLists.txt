@@ -6,6 +6,8 @@ file(GLOB_RECURSE SRC ./*.c)
 #list(FILTER SRC EXCLUDE REGEX ".*DeamonByMemShare\\.c$")
 # find include headers files
 include_directories(${HEADER_PATH})
+# generated headers (Version.h from configure_file)
+include_directories(${CMAKE_BINARY_DIR}/generated)
 
 # threading library (pthread on POSIX / winpthreads on MinGW)
 set(THREADS_PREFER_PTHREAD_FLAG ON)
@@ -20,9 +22,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${LIB_PATH_SHARED})
 # generate lib
 add_library(${HTTP2_CLIENT} SHARED ${SRC})
 
-# set output name and ensure it goes to the correct directory
+# set output name, soname versioning, and ensure it goes to the correct directory
 set_target_properties(${HTTP2_CLIENT} PROPERTIES
         OUTPUT_NAME ${HTTP2_CLIENT}
+        VERSION ${HTTP2CLIENT_VERSION_MAJOR}.${HTTP2CLIENT_VERSION_MINOR}.${HTTP2CLIENT_VERSION_PATCH}
+        SOVERSION ${HTTP2CLIENT_SOVERSION}
         LIBRARY_OUTPUT_DIRECTORY ${LIB_PATH_SHARED}
         ARCHIVE_OUTPUT_DIRECTORY ${LIB_PATH_SHARED}
         LIBRARY_OUTPUT_DIRECTORY_DEBUG ${LIB_PATH_SHARED}

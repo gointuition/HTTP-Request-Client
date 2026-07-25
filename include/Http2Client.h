@@ -11,6 +11,7 @@
 #define Http2Client_h
 
 #include "Basket.h"
+#include "Version.h"
 
 #ifdef __cplusplus
 extern "C" {

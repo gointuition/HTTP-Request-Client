@@ -1,9 +1,25 @@
 cmake_minimum_required(VERSION 3.29)
-project(Http2 C)
+project(Http2 VERSION 1.0.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 17)
 
 set(CMAKE_MINIMUM_REQUIRED_VERSION 3.29)
+
+########## API / soname versioning ##########################
+# SOVERSION (major) — bump on ABI-breaking changes
+# VERSION (major.minor.patch) — full library version
+set(HTTP2CLIENT_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(HTTP2CLIENT_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(HTTP2CLIENT_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+set(HTTP2CLIENT_SOVERSION ${PROJECT_VERSION_MAJOR})
+############################################################
+
+# Generate Version.h from template (single source of truth: project VERSION)
+configure_file(
+        ${PROJECT_SOURCE_DIR}/include/Version.h.in
+        ${CMAKE_BINARY_DIR}/generated/Version.h
+        @ONLY
+)
 
 # libssl.a can not be used when making a shared object, so compile it with PIC
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
