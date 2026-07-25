@@ -80,7 +80,7 @@ static const size_t hpackStaticTableSize = sizeof(requestHeaderHpackStaticTable)
 static size_t calculateHpackBufferSize(RequestHeader *headers, size_t numHeaders);
 static unsigned char *hpackPseudoHeaders(Basket *basket, RequestHeader header, unsigned char *hpackBufferPtr);
 static unsigned char *hpackHeaders(RequestHeader header, unsigned char *hpackBufferPtr);
-static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, size_t bufferSize, const char *method,
+static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, size_t bufferSize, int hasPayload,
                                              const unsigned char *hpackBuffer, size_t hpackPayloadLen, uint32_t streamId);
 static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t bufferSize);
 
@@ -201,7 +201,8 @@ static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t 
     const size_t hpackPayloadLen = hpackBufferPtr - hpackBuffer;
 
     // TODO other browsers
-    size_t totalPayloadLen = buildHeadersFrameBuffer_Chrome(buffer, bufferSize, basket -> method, hpackBuffer,
+    const int hasPayload = (basket -> request.payload != NULL) ? 1 : 0;
+    size_t totalPayloadLen = buildHeadersFrameBuffer_Chrome(buffer, bufferSize, hasPayload, hpackBuffer,
                                                             hpackPayloadLen, basket -> streamId);
 
     return totalPayloadLen + 9;;
@@ -249,19 +250,14 @@ static unsigned char* hpackPseudoHeaders(Basket *basket, const RequestHeader hea
     size_t valueLen = strlen(value);
 
     if (strcasecmp(name, ":method") == 0) {
-        // static table lookup for method
+        // HPACK static table only has GET (index 2) and POST (index 3)
         if (strcasecmp(value, "GET") == 0) {
-            *hpackBufferPtr++ = 0x82; // Index 2
+            *hpackBufferPtr++ = 0x82; // Index 2: :method GET
         } else if (strcasecmp(value, "POST") == 0) {
-            *hpackBufferPtr++ = 0x83; // Index 3
-        } else if (strcasecmp(value, "PUT") == 0) {
-            *hpackBufferPtr++ = 0x84; // Index 4
-        } else if (strcasecmp(value, "DELETE") == 0) {
-            *hpackBufferPtr++ = 0x85; // Index 5
+            *hpackBufferPtr++ = 0x83; // Index 3: :method POST
         } else {
-            // fallback: literal header without indexing
-            // not: pseudo-headers generally shouldn't be indexed dynamically in some implementations
-            // but standard allows it. Using 0x00 (no indexing) is safer for pseudo-headers if not in static table
+            // PUT, PATCH, DELETE, etc. are not in the static table,
+            // use literal header field without indexing
             *hpackBufferPtr++ = 0x00;
             size_t nameLen = strlen(name);
             hpackEncodeInteger(nameLen, 7, 0x00, &hpackBufferPtr);
@@ -382,7 +378,7 @@ static unsigned char *hpackHeaders(RequestHeader header, unsigned char *hpackBuf
  * @param streamId
  * @return
  */
-static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, const size_t bufferSize, const char *method,
+static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, const size_t bufferSize, const int hasPayload,
                                       const unsigned char *hpackBuffer, size_t hpackPayloadLen,
                                       const uint32_t streamId) {
     /**
@@ -414,8 +410,7 @@ static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, const size_t
     buffer[1] = (totalPayloadLen >> 8) & 0xFF;
     buffer[2] = totalPayloadLen & 0xFF;
     buffer[3] = 0x01; // HEADERS frame
-    // TODO other methods
-    if (strcasecmp(method, "POST") == 0) {
+    if (hasPayload) {
         buffer[4] = 0x24; // Flags: END_HEADERS | PRIORITY (because a DATA frame will follow)
     } else {
         buffer[4] = 0x25; // Flags: END_HEADERS | END_STREAM | PRIORITY

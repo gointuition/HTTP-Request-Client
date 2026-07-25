@@ -64,6 +64,12 @@ Basket* buildBasket(const char *requestString) {
                 basket -> method = HTTP_METHOD_POST;
             } else if (strcasecmp(method, HTTP_METHOD_GET) == 0) {
                 basket -> method = HTTP_METHOD_GET;
+            } else if (strcasecmp(method, HTTP_METHOD_PUT) == 0) {
+                basket -> method = HTTP_METHOD_PUT;
+            } else if (strcasecmp(method, HTTP_METHOD_PATCH) == 0) {
+                basket -> method = HTTP_METHOD_PATCH;
+            } else if (strcasecmp(method, HTTP_METHOD_DELETE) == 0) {
+                basket -> method = HTTP_METHOD_DELETE;
             } else {
                 LOG("ERROR", "unsupported method: %s", method);
                 basket -> error = ERR_REQUEST_UNSUPPORTED_METHOD;
