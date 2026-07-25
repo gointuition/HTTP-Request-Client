@@ -5,6 +5,8 @@ project(src)
 file(GLOB SRC ./*.c)
 # find include headers files
 include_directories(${HEADER_PATH})
+# generated headers (Version.h from configure_file)
+include_directories(${CMAKE_BINARY_DIR}/generated)
 # link libs directories
 link_directories(${LIB_PATH})
 # link libs
