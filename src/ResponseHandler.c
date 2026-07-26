@@ -383,7 +383,19 @@ static void handleHeadersFrame(Basket *basket, unsigned char *payload, uint32_t 
     unsigned char *payloadStart = payload;
     size_t payloadSize = length;
 
-    // Skip Priority if present
+    // Skip Pad Length if PADDED flag (0x08) is set
+    size_t padLength = 0;
+    if (flags & 0x08) {
+        if (payloadSize < 1) {
+            basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+            return;
+        }
+        padLength = payloadStart[0];
+        payloadStart += 1;
+        payloadSize -= 1;
+    }
+
+    // Skip Priority if present (0x20)
     if (flags & 0x20) {
         if (payloadSize < 5) {
             basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
@@ -391,6 +403,15 @@ static void handleHeadersFrame(Basket *basket, unsigned char *payload, uint32_t 
         }
         payloadStart += 5;
         payloadSize -= 5;
+    }
+
+    // Remove padding from the end
+    if (padLength > 0) {
+        if (padLength > payloadSize) {
+            basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+            return;
+        }
+        payloadSize -= padLength;
     }
 
     // Call the existing decoder logic, passing ctx
@@ -613,10 +634,21 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
              */
             // indexed header field (1xxx xxxx)
             size_t index = hpackDecodeInteger(payload, &pos, 7, length);
-            if (index == 0 || index >= sizeof(responseHeaderStaticTable) / sizeof(responseHeaderStaticTable[0])) {
-                LOG("ERROR", "Response HEADERS frame: invalid index %zu", index);
+            if (index == 0) {
+                LOG("ERROR", "Response HEADERS frame: invalid index 0");
                 basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                 continue;
+            }
+            // Validate dynamic table index (indices >= static table size refer to dynamic table)
+            size_t staticTableCount = sizeof(responseHeaderStaticTable) / sizeof(responseHeaderStaticTable[0]);
+            if (index >= staticTableCount) {
+                size_t dynamicIndex = index - (staticTableCount - 1) - 1;
+                if (dynamicIndex >= ctx -> dynamicTableSize) {
+                    LOG("ERROR", "Response HEADERS frame: dynamic table index %zu out of range (table size %zu)",
+                        dynamicIndex, ctx -> dynamicTableSize);
+                    basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+                    continue;
+                }
             }
 
             getHeaderFromTable(index, &resHeader.name, &resHeader.value, ctx);

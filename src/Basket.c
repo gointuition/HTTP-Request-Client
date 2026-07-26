@@ -13,7 +13,7 @@
 
 static void initBasket(Basket * basket);
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders);
-static size_t processCookies(RequestHeader *headers, size_t idx, const json_t *cookie, const int calculateCookieCount);
+static size_t processCookies(RequestHeader *headers, size_t idx, const json_t *cookie, const int calculateCookieCount, int headerValueMaxLength);
 
 Basket* buildBasket(const char *requestString) {
 //    printf("%s\n", requestString);
@@ -94,7 +94,7 @@ Basket* buildBasket(const char *requestString) {
             } else {
                 basket -> browserType = detectBrowseType(json_string_value(jsonUA));
                 // TODO
-                if (basket -> browserType != BROWSER_CHROME) {
+                if (getBrowserFingerprint(basket -> browserType) == NULL) {
                     LOG("ERROR", "unsupported user-agent: %s", json_string_value(jsonUA));
                     basket -> error = ERR_REQUEST_UNSUPPORTED_USERAGENT;
                 }
@@ -197,7 +197,10 @@ void initBasket(Basket * basket) {
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     size_t idx = 0;
 
-    const size_t cookieCount = processCookies(NULL, 0, json_object_get(jsonHeaders, "cookie"), 1);
+    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const int headerValueMaxLength = (fp != NULL) ? fp -> headerValueMaxLength : 4096;
+
+    const size_t cookieCount = processCookies(NULL, 0, json_object_get(jsonHeaders, "cookie"), 1, headerValueMaxLength);
     // +1: content-length ?
     // +4: pseudo headers
     basket -> request.headers = (RequestHeader *) malloc(sizeof(RequestHeader) * (json_object_size(jsonHeaders) + 1 + 4 + cookieCount));
@@ -209,17 +212,30 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     const json_t *pseudoPath = json_object_get(jsonHeaders, ":path");
     if (pseudoMethod == NULL || pseudoAuthority == NULL || pseudoScheme == NULL || pseudoPath == NULL) {
         containPseudoHeaders = 0;
-        if (basket -> browserType == BROWSER_CHROME) {
-            basket -> request.headers[idx++] = (RequestHeader) { ":method", strdup(basket -> method), 1, 0, 1 };
-            basket -> request.headers[idx++] = (RequestHeader) { ":authority",getHeaderAuthority(basket -> request.urlComponents.host, basket -> request.urlComponents.port), 1, 0, 1 };
-            basket -> request.headers[idx++] = (RequestHeader) { ":scheme", basket -> request.urlComponents.scheme, 1, 0, 0 };
-            basket -> request.headers[idx++] = (RequestHeader) { ":path", basket -> request.urlComponents.path, 1, 0, 0 };
-        } else {
-            // TODO other browsers, clients
-            basket -> request.headers[idx++] = (RequestHeader) { ":method", strdup(basket -> method), 1, 0, 1 };
-            basket -> request.headers[idx++] = (RequestHeader) { ":authority",getHeaderAuthority(basket -> request.urlComponents.host, basket -> request.urlComponents.port), 1, 0, 1 };
-            basket -> request.headers[idx++] = (RequestHeader) { ":scheme", basket -> request.urlComponents.scheme, 1, 0, 0 };
-            basket -> request.headers[idx++] = (RequestHeader) { ":path", basket -> request.urlComponents.path, 1, 0, 0 };
+
+        // Emit the pseudo-headers in the browser-specific order (part of the
+        // wire fingerprint). Fall back to Chrome's order when unknown.
+        static const PseudoHeaderType defaultOrder[] = {
+            PSEUDO_METHOD, PSEUDO_AUTHORITY, PSEUDO_SCHEME, PSEUDO_PATH
+        };
+        const PseudoHeaderType *order =
+            (fp != NULL && fp -> pseudoHeaderOrder != NULL) ? fp -> pseudoHeaderOrder : defaultOrder;
+
+        for (int i = 0; i < 4; i++) {
+            switch (order[i]) {
+                case PSEUDO_METHOD:
+                    basket -> request.headers[idx++] = (RequestHeader) { ":method", strdup(basket -> method), 1, 0, 1 };
+                    break;
+                case PSEUDO_AUTHORITY:
+                    basket -> request.headers[idx++] = (RequestHeader) { ":authority", getHeaderAuthority(basket -> request.urlComponents.host, basket -> request.urlComponents.port), 1, 0, 1 };
+                    break;
+                case PSEUDO_SCHEME:
+                    basket -> request.headers[idx++] = (RequestHeader) { ":scheme", basket -> request.urlComponents.scheme, 1, 0, 0 };
+                    break;
+                case PSEUDO_PATH:
+                    basket -> request.headers[idx++] = (RequestHeader) { ":path", basket -> request.urlComponents.path, 1, 0, 0 };
+                    break;
+            }
         }
     }
 
@@ -247,7 +263,7 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
                 if (value != NULL) {
                     if (strcasecmp("cookie", key) == 0) {
                         // one header max size not more than 4KB, total headers 8KB
-                        idx = processCookies(basket -> request.headers, idx, value, 0);
+                        idx = processCookies(basket -> request.headers, idx, value, 0, headerValueMaxLength);
                     } else {
                         if (strcasecmp("content-length", key) == 0) {
                             basket -> request.containsContentLength = 1;
@@ -270,7 +286,7 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     basket -> request.numHeaders = idx;
 }
 
-static size_t processCookies(RequestHeader *headers, size_t idx, const json_t *cookie, const int calculateCookieCount) {
+static size_t processCookies(RequestHeader *headers, size_t idx, const json_t *cookie, const int calculateCookieCount, int headerValueMaxLength) {
     if (cookie == NULL) { return 0; }
 
     const char *fullCookie = json_string_value(cookie);
@@ -298,7 +314,7 @@ static size_t processCookies(RequestHeader *headers, size_t idx, const json_t *c
             size_t valueLen = (size_t) (trimmedEnd - valueStart);
 
             // TODO other browsers
-            if (valueLen <= HEADER_VALUE_MAX_LENGTH_CHROME) {
+            if (valueLen <= (size_t) headerValueMaxLength) {
                 if (calculateCookieCount == 1) {
                     idx++;
                 } else {
@@ -318,7 +334,7 @@ static size_t processCookies(RequestHeader *headers, size_t idx, const json_t *c
                 while (offset < valueLen) {
                     size_t chunkLen = valueLen - offset;
                     // TODO other browsers
-                    if (chunkLen > HEADER_VALUE_MAX_LENGTH_CHROME) { chunkLen = HEADER_VALUE_MAX_LENGTH_CHROME; }
+                    if (chunkLen > (size_t) headerValueMaxLength) { chunkLen = (size_t) headerValueMaxLength; }
 
                     if (calculateCookieCount == 1) {
                         idx++;

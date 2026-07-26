@@ -43,6 +43,36 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
 
 ########## third parties ####################################
 
+# Apply local patches from patches/<lib>/*.patch to a third-party source tree.
+# Patches are applied in filename order (use 0001-, 0002-, ... prefixes).
+# A patch that `git apply --reverse --check` accepts is already applied and skipped,
+# so re-running cmake never double-applies.
+function(apply_third_party_patches LIB_NAME LIB_DIR)
+    file(GLOB PATCH_FILES ${PROJECT_SOURCE_DIR}/patches/${LIB_NAME}/*.patch)
+    list(SORT PATCH_FILES)
+    foreach (PATCH_FILE ${PATCH_FILES})
+        execute_process(
+                COMMAND git apply --reverse --check ${PATCH_FILE}
+                WORKING_DIRECTORY ${LIB_DIR}
+                RESULT_VARIABLE PATCH_ALREADY_APPLIED
+                ERROR_QUIET
+        )
+        if (PATCH_ALREADY_APPLIED EQUAL 0)
+            message(STATUS "Patch already applied, skipping: ${PATCH_FILE}")
+            continue()
+        endif ()
+        execute_process(
+                COMMAND git apply ${PATCH_FILE}
+                WORKING_DIRECTORY ${LIB_DIR}
+                RESULT_VARIABLE PATCH_RESULT
+        )
+        if (NOT PATCH_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to apply patch: ${PATCH_FILE}")
+        endif ()
+        message(STATUS "Applied patch: ${PATCH_FILE}")
+    endforeach ()
+endfunction()
+
 ##### Boringssl start
 
 set(BORINGSSL_DIR ${PROJECT_SOURCE_DIR}/third_party/boringssl)
@@ -58,6 +88,9 @@ if (NOT EXISTS ${BORINGSSL_DIR})
         message(FATAL_ERROR "Failed to download BoringSSL")
     endif ()
 endif ()
+
+# apply local patches (patches/boringssl/*.patch) before building
+apply_third_party_patches(boringssl ${BORINGSSL_DIR})
 
 # add BoringSSL as a subdirectory
 # Only the crypto/ssl libraries are needed; skip building BoringSSL's own

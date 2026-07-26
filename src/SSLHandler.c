@@ -15,8 +15,10 @@
 #include "brotli/decode.h"
 #include "brotli/encode.h"
 
-void configureSSLSettings_Chrome(const char *hostname, SSL *ssl);
+static void applyTlsFingerprint(const char *hostname, SSL *ssl, const BrowserFingerprint *fp);
 
+int zlibCompressCb(SSL *ssl, CBB *out, const uint8_t *in, size_t inLen);
+int zlibDecompressCb(SSL *ssl, CRYPTO_BUFFER **out, size_t uncompressedLen, const uint8_t *in, size_t inLen);
 int brotliCompressCb(SSL *ssl, CBB *out, const uint8_t *in, size_t inLen);
 int brotliDecompressCb(SSL *ssl, CRYPTO_BUFFER **out, size_t uncompressedLen, const uint8_t *in, size_t inLen);
 int newSessionCallback(SSL *ssl, SSL_SESSION *session);
@@ -31,12 +33,19 @@ SSL_CTX* createSSLContext(Basket *basket) {
 
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
     SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION);
-    SSL_CTX_set_grease_enabled(ctx, 1);
-    SSL_CTX_set_permute_extensions(ctx, 1);
+
+    // GREASE (RFC 8701) can only be toggled at the SSL_CTX level, so gate it
+    // here based on the browser fingerprint (Chrome uses it, Safari/CriOS does not).
+    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    if (fp != NULL && fp -> enableGrease) {
+        SSL_CTX_set_grease_enabled(ctx, 1);
+//        SSL_CTX_set_strict_cipher_list(ctx, fp -> cipherList);
+    }
 
     // enable client-side session cache and register callback for TLS 1.3 session resumption (pre_shared_key)
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
     SSL_CTX_sess_set_new_cb(ctx, newSessionCallback);
+
 
     return ctx;
 }
@@ -60,77 +69,55 @@ SSL* createSSL(Basket *basket, SSL_CTX *ctx, int sockfd) {
 }
 
 int configureSSLSettings(Basket *basket, SSL *ssl) {
-    if (basket -> browserType == BROWSER_CHROME) {
-        configureSSLSettings_Chrome(basket -> request.urlComponents.host, ssl);
-    } else {
+    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    if (fp == NULL) {
         // TODO
         LOG("ERROR", "unsupported user-agent");
         basket -> error = ERR_REQUEST_UNSUPPORTED_USERAGENT;
         return -1;
     }
+    applyTlsFingerprint(basket -> request.urlComponents.host, ssl, fp);
     return 1;
 }
 
+// status_request: empty responder-id list + empty request extensions
 static const uint8_t emptySCTRequest[] = { 0x00, 0x00 };
 
+// application settings (ALPS) payload advertising h2
 static const uint8_t alpsSettings[] = {
     0x68, 0x32, // h2
     // 0x00, 0x00 // empty payload
 };
 
-// Chrome-like ALPN
-static const uint8_t ALPN_CHROME[] = {
-    0x02, // binary length prefix
-    'h','2', // ASCII protocol ID
-    0x08,
-    'h','t','t','p','/','1','.','1'
-};
-
-// Chrome-like cipher suites
-static const char *CIPHERS_CHROME =
-    "TLS_AES_128_GCM_SHA256:"
-    "TLS_AES_256_GCM_SHA384:"
-    "TLS_CHACHA20_POLY1305_SHA256:"
-    "ECDHE-ECDSA-AES128-GCM-SHA256:"
-    "ECDHE-RSA-AES128-GCM-SHA256:"
-    "ECDHE-ECDSA-AES256-GCM-SHA384:"
-    "ECDHE-RSA-AES256-GCM-SHA384:"
-    "ECDHE-ECDSA-CHACHA20-POLY1305:"
-    "ECDHE-RSA-CHACHA20-POLY1305:"
-    "ECDHE-RSA-AES128-SHA:"
-    "ECDHE-RSA-AES256-SHA:"
-    "AES128-GCM-SHA256:"
-    "AES256-GCM-SHA384:"
-    "AES128-SHA:"
-    "AES256-SHA";
-
-static const char *GROUPS_CHROME =
-    "X25519MLKEM768:"
-    "X25519:"
-    "P-256:"
-    "P-384";
-
-static const uint16_t SIGALGS_CHROME[] = {
-    0x904,
-    0x905,
-    0x906,
-    0x0403,  // ecdsa_secp256r1_sha256
-    0x0804,  // rsa_pss_rsae_sha256
-    0x0401,  // rsa_pkcs1_sha256
-    0x0503,  // ecdsa_secp384r1_sha384
-    0x0805,  // rsa_pss_rsae_sha384
-    0x0501,  // rsa_pkcs1_sha384
-    0x0806,  // rsa_pss_rsae_sha512
-    0x0601   // rsa_pkcs1_sha512
-};
-
-void configureSSLSettings_Chrome(const char *hostname, SSL *ssl) {
+// Applies a browser's TLS ClientHello fingerprint. All browser-specific data
+// (cipher list, groups, sigalgs, extension toggles) comes from the profile,
+// so this function stays browser-agnostic.
+static void applyTlsFingerprint(const char *hostname, SSL *ssl, const BrowserFingerprint *fp) {
+    // permute ClientHello extensions (Chrome only)
+    if (fp -> enablePermuteExtensions) {
+        SSL_set_permute_extensions(ssl, 1);
+    }
+    // suppress the session_ticket (35) extension when the profile omits it
+    // (e.g. iOS Chrome). SSL_OP_NO_TICKET only drops the TLS 1.2 ticket
+    // extension from the ClientHello; TLS 1.3 resumption via pre_shared_key is
+    // a separate mechanism and stays enabled.
+    if (!fp -> enableSessionTicket) {
+        SSL_set_options(ssl, SSL_OP_NO_TICKET);
+    }
     // set ALPN protocols
-    SSL_set_alpn_protos(ssl, ALPN_CHROME, sizeof(ALPN_CHROME));
+    SSL_set_alpn_protos(ssl, fp -> alpn, fp -> alpnLen);
     // set cipher suites
-    SSL_set_cipher_list(ssl, CIPHERS_CHROME);
-    // enable ech grease
-    SSL_set_enable_ech_grease(ssl, 1);
+    SSL_set_strict_cipher_list(ssl, fp -> cipherList);
+//    SSL_CTX_set_strict_cipher_list(ssl, fp -> cipherList);
+    // set TLS 1.3 cipher order (SSL_set_strict_cipher_list only covers TLS 1.2
+    // and below). Reuse the same cipher list string: BoringSSL picks out the
+    // TLS 1.3 ciphers named in it and advertises them in that exact order,
+    // instead of its default AES-hardware-based ordering.
+    SSL_set_tls13_cipher_prefs(ssl, fp -> cipherList);
+    // enable ech grease (Chrome only)
+    if (fp -> enableEchGrease) {
+        SSL_set_enable_ech_grease(ssl, 1);
+    }
     // enable ECDH
     SSL_set_ecdh_auto(ssl, 1);
     // set SNI
@@ -140,14 +127,52 @@ void configureSSLSettings_Chrome(const char *hostname, SSL *ssl) {
     // enable signed cert timestamps
     SSL_enable_signed_cert_timestamps(ssl);
     SSL_set_signed_cert_timestamp_list(ssl, emptySCTRequest, sizeof(emptySCTRequest));
-    // add application settings
-    SSL_add_application_settings(ssl, alpsSettings, sizeof(alpsSettings), NULL, 0);
+    // add application settings (ALPS, Chrome only)
+    if (fp -> enableAlps) {
+        SSL_add_application_settings(ssl, alpsSettings, sizeof(alpsSettings), NULL, 0);
+    }
     // set supported groups
-    SSL_set1_groups_list(ssl, GROUPS_CHROME);
+    SSL_set1_groups_list(ssl, fp -> groups);
     // set signature algorithms
-    SSL_set_verify_algorithm_prefs(ssl, SIGALGS_CHROME, sizeof(SIGALGS_CHROME) / sizeof(SIGALGS_CHROME[0]));
-    // add cert compression algorithms
-    SSL_CTX_add_cert_compression_alg(SSL_get_SSL_CTX(ssl), 2, brotliCompressCb, brotliDecompressCb);
+    SSL_set_verify_algorithm_prefs(ssl, fp -> sigAlgs, fp -> sigAlgsCount);
+    // add cert compression algorithm (compress_certificate extension). Desktop
+    // Chrome advertises brotli (2); iOS Chrome advertises zlib (1).
+    if (fp -> certCompressionAlg == 2) {
+        SSL_CTX_add_cert_compression_alg(SSL_get_SSL_CTX(ssl), 2, brotliCompressCb, brotliDecompressCb); // brotli (2)
+    } else if (fp -> certCompressionAlg == 1) {
+        SSL_CTX_add_cert_compression_alg(SSL_get_SSL_CTX(ssl), 1, zlibCompressCb, zlibDecompressCb);     // zlib (1)
+    }
+}
+
+int zlibCompressCb(SSL *ssl, CBB *out, const uint8_t *in, size_t inLen) {
+    uLongf compressedSize = compressBound((uLong) inLen);
+    uint8_t *compressed = (uint8_t *) OPENSSL_malloc(compressedSize);
+    if (!compressed) { return 0; }
+
+    if (compress(compressed, &compressedSize, in, (uLong) inLen) != Z_OK) {
+        OPENSSL_free(compressed);
+        return 0;
+    }
+
+    int ret = CBB_add_bytes(out, compressed, compressedSize);
+    OPENSSL_free(compressed);
+    return ret;
+}
+
+int zlibDecompressCb(SSL *ssl, CRYPTO_BUFFER **out, size_t uncompressedLen, const uint8_t *in, size_t inLen) {
+    uint8_t *decompressed = (uint8_t *) OPENSSL_malloc(uncompressedLen);
+    if (!decompressed) { return 0; }
+
+    uLongf decompressedSize = (uLongf) uncompressedLen;
+    if (uncompress(decompressed, &decompressedSize, in, (uLong) inLen) != Z_OK
+        || decompressedSize != uncompressedLen) {
+        OPENSSL_free(decompressed);
+        return 0;
+    }
+
+    *out = CRYPTO_BUFFER_new(decompressed, decompressedSize, NULL);
+    OPENSSL_free(decompressed);
+    return *out != NULL;
 }
 
 int brotliCompressCb(SSL *ssl, CBB *out, const uint8_t *in, size_t inLen) {

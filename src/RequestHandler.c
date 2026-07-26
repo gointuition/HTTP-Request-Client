@@ -80,8 +80,9 @@ static const size_t hpackStaticTableSize = sizeof(requestHeaderHpackStaticTable)
 static size_t calculateHpackBufferSize(RequestHeader *headers, size_t numHeaders);
 static unsigned char *hpackPseudoHeaders(Basket *basket, RequestHeader header, unsigned char *hpackBufferPtr);
 static unsigned char *hpackHeaders(RequestHeader header, unsigned char *hpackBufferPtr);
-static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, size_t bufferSize, int hasPayload,
-                                             const unsigned char *hpackBuffer, size_t hpackPayloadLen, uint32_t streamId);
+static size_t buildHeadersFrameBuffer(unsigned char *buffer, size_t bufferSize, int hasPayload,
+                                      const unsigned char *hpackBuffer, size_t hpackPayloadLen, uint32_t streamId,
+                                      int includePriority);
 static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t bufferSize);
 
 int establishTransport(Basket *basket, SSL *ssl) {
@@ -92,24 +93,25 @@ int establishTransport(Basket *basket, SSL *ssl) {
         return -1;
     }
 
-    if (basket -> browserType == BROWSER_CHROME) {
-        // send HTTP/2 Settings frame
-        if (SSL_write(ssl, SETTINGS_FRAME_CHROME, sizeof(SETTINGS_FRAME_CHROME)) <= 0) {
-            LOG("ERROR", "send HTTP/2 settings frame fa");
-            basket -> error = ERR_REQUEST_SENDING_HTTP2_SETTINGS_FRAME_FAILED;
-            return -1;
-        }
-
-        // sned HTTP/2 Window Update frame
-        if (SSL_write(ssl, WINDOW_UPDATE_FRAME_CHROME, sizeof(WINDOW_UPDATE_FRAME_CHROME)) <= 0) {
-            LOG("ERROR", "send HTTP/2 window update frame");
-            basket -> error = ERR_REQUEST_SENDING_HTTP2_WINDOW_UPDATE_FRAME_FAILED;
-            return -1;
-        }
-    } else {
+    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    if (fp == NULL) {
         // TODO
         LOG("ERROR", "unsupported user-agent");
         basket -> error = ERR_REQUEST_UNSUPPORTED_USERAGENT;
+        return -1;
+    }
+
+    // send HTTP/2 Settings frame
+    if (SSL_write(ssl, fp -> settingsFrame, fp -> settingsFrameLen) <= 0) {
+        LOG("ERROR", "send HTTP/2 settings frame fa");
+        basket -> error = ERR_REQUEST_SENDING_HTTP2_SETTINGS_FRAME_FAILED;
+        return -1;
+    }
+
+    // send HTTP/2 Window Update frame
+    if (SSL_write(ssl, fp -> windowUpdateFrame, fp -> windowUpdateFrameLen) <= 0) {
+        LOG("ERROR", "send HTTP/2 window update frame");
+        basket -> error = ERR_REQUEST_SENDING_HTTP2_WINDOW_UPDATE_FRAME_FAILED;
         return -1;
     }
 
@@ -202,8 +204,10 @@ static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t 
 
     // TODO other browsers
     const int hasPayload = (basket -> request.payload != NULL) ? 1 : 0;
-    size_t totalPayloadLen = buildHeadersFrameBuffer_Chrome(buffer, bufferSize, hasPayload, hpackBuffer,
-                                                            hpackPayloadLen, basket -> streamId);
+    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const int includePriority = (fp != NULL) ? fp -> enableHeadersPriority : 0;
+    size_t totalPayloadLen = buildHeadersFrameBuffer(buffer, bufferSize, hasPayload, hpackBuffer,
+                                                     hpackPayloadLen, basket -> streamId, includePriority);
 
     return totalPayloadLen + 9;;
 }
@@ -378,11 +382,11 @@ static unsigned char *hpackHeaders(RequestHeader header, unsigned char *hpackBuf
  * @param streamId
  * @return
  */
-static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, const size_t bufferSize, const int hasPayload,
+static size_t buildHeadersFrameBuffer(unsigned char *buffer, const size_t bufferSize, const int hasPayload,
                                       const unsigned char *hpackBuffer, size_t hpackPayloadLen,
-                                      const uint32_t streamId) {
+                                      const uint32_t streamId, const int includePriority) {
     /**
-     * priority information (5 bytes)
+     * priority information (5 bytes), only present when includePriority is set
     +---+-------------+-----------------------------------------------+
     |E|                 Stream Dependency (31)                       |
     +-+-------------+-----------------------------------------------+
@@ -390,18 +394,22 @@ static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, const size_t
     +-+-------------+
     */
     unsigned char priorityData[5];
-    const int exclusive = 1; // Exclusive dependency
-    const uint32_t streamDependency = 0; // TODO depends on root stream
-    const uint8_t weight = 255; // weight 256 (256 - 1 = 255)
-    // stream dependency (31 bits) with exclusive flag
-    priorityData[0] = (exclusive << 7) | (streamDependency >> 24);
-    priorityData[1] = (streamDependency >> 16) & 0xFF;
-    priorityData[2] = (streamDependency >> 8) & 0xFF;
-    priorityData[3] = streamDependency & 0xFF;
-    priorityData[4] = weight;
+    size_t priorityLen = 0;
+    if (includePriority) {
+        const int exclusive = 1; // Exclusive dependency
+        const uint32_t streamDependency = 0; // TODO depends on root stream
+        const uint8_t weight = 255; // weight 256 (256 - 1 = 255)
+        // stream dependency (31 bits) with exclusive flag
+        priorityData[0] = (exclusive << 7) | (streamDependency >> 24);
+        priorityData[1] = (streamDependency >> 16) & 0xFF;
+        priorityData[2] = (streamDependency >> 8) & 0xFF;
+        priorityData[3] = streamDependency & 0xFF;
+        priorityData[4] = weight;
+        priorityLen = sizeof(priorityData);
+    }
 
-    // total payload length = priority data (5) + HPACK payload
-    size_t totalPayloadLen = 5 + hpackPayloadLen;
+    // total payload length = optional priority data + HPACK payload
+    size_t totalPayloadLen = priorityLen + hpackPayloadLen;
     if (totalPayloadLen + 9 > bufferSize) {
         return -1;
     }
@@ -410,20 +418,27 @@ static size_t buildHeadersFrameBuffer_Chrome(unsigned char *buffer, const size_t
     buffer[1] = (totalPayloadLen >> 8) & 0xFF;
     buffer[2] = totalPayloadLen & 0xFF;
     buffer[3] = 0x01; // HEADERS frame
-    if (hasPayload) {
-        buffer[4] = 0x24; // Flags: END_HEADERS | PRIORITY (because a DATA frame will follow)
-    } else {
-        buffer[4] = 0x25; // Flags: END_HEADERS | END_STREAM | PRIORITY
+
+    uint8_t flags = 0x04; // END_HEADERS
+    if (!hasPayload) {
+        flags |= 0x01; // END_STREAM (no DATA frame will follow)
     }
+    if (includePriority) {
+        flags |= 0x20; // PRIORITY
+    }
+    buffer[4] = flags;
+
     buffer[5] = (streamId >> 24) & 0x7F;
     buffer[6] = (streamId >> 16) & 0xFF;
     buffer[7] = (streamId >> 8) & 0xFF;
     buffer[8] = streamId & 0xFF;
 
-    // copy priority data
-    memcpy(buffer + 9, priorityData, sizeof(priorityData));
+    // copy optional priority data
+    if (priorityLen > 0) {
+        memcpy(buffer + 9, priorityData, priorityLen);
+    }
     // copy HPACK payload
-    memcpy(buffer + 9 + sizeof(priorityData), hpackBuffer, hpackPayloadLen);
+    memcpy(buffer + 9 + priorityLen, hpackBuffer, hpackPayloadLen);
 
     return totalPayloadLen;
 }

@@ -43,6 +43,7 @@ void parseUrlScheme(char **current, URLComponents *components);
 void parseUrlAuthority(char **current, URLComponents *components);
 void parseUrlPath(char **current, URLComponents *components);
 void parseUrlQuery(char **current, URLComponents *components);
+void appendQueryToPath(URLComponents *components);
 void parseUrlFragment(char **current, URLComponents *components);
 QueryParams parseQueryParams(const char* queryString);
 PathSegments parsePathSegments(const char* path);

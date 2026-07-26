@@ -13,6 +13,7 @@
 #include "RequestHandler.h"
 #include "SocketHandler.h"
 #include "SSLHandler.h"
+#include "BrowserHandler.h"
 #include "Log.h"
 
 // common file shared between task thread and daemon thread
@@ -232,11 +233,17 @@ static void createSession(Basket *basket) {
     }
 
     // SSL handshake
-    // if a cached TLS session exists for this host:port, set it for session resumption (pre_shared_key)
-    SSL_SESSION *cachedSession = lookupTLSSession(basket -> request.urlComponents.host, basket -> request.urlComponents.port);
-    if (cachedSession) {
-        SSL_set_session(ssl, cachedSession);
-        LOG("DEBUG", "resuming TLS session for %s:%s", basket -> request.urlComponents.host, basket -> request.urlComponents.port);
+    // if a cached TLS session exists for this host:port, set it for session resumption (pre_shared_key).
+    // Only offer it when the browser profile advertises pre_shared_key (41); iOS Chrome (CriOS) omits
+    // the extension, so skipping SSL_set_session keeps it out of the ClientHello. psk_key_exchange_modes
+    // (45) is unaffected as BoringSSL sends it independently for any TLS 1.3-capable client.
+    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    if (fp != NULL && fp -> enablePreSharedKey) {
+        SSL_SESSION *cachedSession = lookupTLSSession(basket -> request.urlComponents.host, basket -> request.urlComponents.port);
+        if (cachedSession) {
+            SSL_set_session(ssl, cachedSession);
+            LOG("DEBUG", "resuming TLS session for %s:%s", basket -> request.urlComponents.host, basket -> request.urlComponents.port);
+        }
     }
 
     // set conn info on SSL so the new-session callback can cache the session
@@ -249,11 +256,26 @@ static void createSession(Basket *basket) {
     int connect = SSL_connect(ssl);
 
     if (connect != 1) {
+        // capture diagnostics BEFORE freeSession(): SSL_shutdown/SSL_free may drain the error queue,
+        // which previously produced the meaningless "error:00000000:invalid library (0)"
+        const int sslError = SSL_get_error(ssl, connect);
+        const int savedErrno = errno;
+        char errBuf[256] = "no error in queue";
+        const unsigned long queuedError = ERR_get_error();
+        if (queuedError != 0) {
+            ERR_error_string_n(queuedError, errBuf, sizeof(errBuf));
+        }
+
         SSL_set_app_data(ssl, NULL);
         free(connInfo);
         freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
 
-        LOG("ERROR", "SSL_connect failed: %s", ERR_error_string(ERR_get_error(), NULL));
+        if (sslError == SSL_ERROR_SYSCALL) {
+            // no entry in the error queue by design: connection reset / EOF during handshake
+            LOG("ERROR", "SSL_connect failed: SSL_ERROR_SYSCALL, %s (errno: %d)", strerror(savedErrno), savedErrno);
+        } else {
+            LOG("ERROR", "SSL_connect failed: ssl error %d, %s", sslError, errBuf);
+        }
         basket -> error = ERR_SESSION_SSL_CONNECT_FAILED;
         return;
     }

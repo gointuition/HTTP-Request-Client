@@ -40,6 +40,10 @@ int parseUrl(const char *url, URLComponents *components) {
     parseUrlPath(&current, components);
     // parse query
     parseUrlQuery(&current, components);
+
+    // append query to path
+    appendQueryToPath(components);
+
     // parse fragment
     parseUrlFragment(&current, components);
 
@@ -157,6 +161,17 @@ void parseUrlPath(char **current, URLComponents *components) {
             strcpy(components -> path, *current);
             *current += strlen(*current);
         }
+    }
+}
+
+void appendQueryToPath(URLComponents *components) {
+    if (components -> query[0] != '\0') {
+        int pathLen = strlen(components -> path);
+        if (pathLen > 0 && components -> path[pathLen - 1] != '/') {
+            strcat(components -> path, "/");
+        }
+        strcat(components -> path, components -> query);
+        components -> query[0] = '\0';
     }
 }
 
