@@ -1,0 +1,209 @@
+diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
+index 64806d2ed..3d47a048b 100644
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -1516,6 +1516,8 @@ DEFINE_CONST_STACK_OF(SSL_CIPHER)
+ #define SSL_CIPHER_PSK_WITH_AES_128_CBC_SHA 0x008c
+ #define SSL_CIPHER_PSK_WITH_AES_256_CBC_SHA 0x008d
+ #define SSL_CIPHER_RSA_WITH_3DES_EDE_CBC_SHA 0x000a
++#define SSL_CIPHER_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA 0xc008
++#define SSL_CIPHER_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA 0xc012
+ 
+ // The following constants are not cipher suites, but are used in the protocol
+ // as signalling values.
+@@ -1763,6 +1765,21 @@ OPENSSL_EXPORT int SSL_CTX_cipher_in_group(const SSL_CTX *ctx, size_t i);
+ // SSL_get_ciphers returns the cipher list for `ssl`, in order of preference.
+ OPENSSL_EXPORT STACK_OF(SSL_CIPHER) *SSL_get_ciphers(const SSL *ssl);
+ 
++// SSL_set_tls13_cipher_prefs configures `ssl` to advertise, in the ClientHello,
++// the TLS 1.3 cipher suites named in `str` in exactly the order they appear
++// there, overriding the default ordering that depends on AES hardware support.
++// `str` uses the same ':'-separated cipher-name syntax as
++// `SSL_set_strict_cipher_list`; tokens that do not name a TLS 1.3 cipher suite
++// (TLS 1.2 cipher names, rule keywords, etc.) are ignored, so the exact same
++// string passed to `SSL_set_strict_cipher_list` may be reused here. A null or
++// empty string, or one naming no TLS 1.3 cipher, clears the override and
++// restores the default behavior. It returns one on success and zero on failure.
++//
++// Note: unlike `SSL_set_strict_cipher_list`, which only controls TLS 1.2 and
++// below, this function is the only way to influence TLS 1.3 cipher ordering,
++// which is otherwise fixed.
++OPENSSL_EXPORT int SSL_set_tls13_cipher_prefs(SSL *ssl, const char *str);
++
+ 
+ // Connection information.
+ 
+diff --git a/include/openssl/tls1.h b/include/openssl/tls1.h
+index f4b348481..c02778f4a 100644
+--- a/include/openssl/tls1.h
++++ b/include/openssl/tls1.h
+@@ -192,6 +192,8 @@ extern "C" {
+ #define TLS1_CK_RSA_WITH_AES_128_GCM_SHA256 0x0300009C
+ #define TLS1_CK_RSA_WITH_AES_256_GCM_SHA384 0x0300009D
+ #define TLS1_CK_ECDHE_ECDSA_WITH_AES_128_CBC_SHA 0x0300C009
++#define TLS1_CK_ECDHE_ECDSA_WITH_DES_192_CBC3_SHA 0x0300C008
++#define TLS1_CK_ECDHE_RSA_WITH_DES_192_CBC3_SHA 0x0300C012
+ #define TLS1_CK_ECDHE_ECDSA_WITH_AES_256_CBC_SHA 0x0300C00A
+ #define TLS1_CK_ECDHE_RSA_WITH_AES_128_CBC_SHA 0x0300C013
+ #define TLS1_CK_ECDHE_RSA_WITH_AES_256_CBC_SHA 0x0300C014
+@@ -226,6 +228,8 @@ extern "C" {
+ #define TLS1_TXT_RSA_WITH_AES_128_GCM_SHA256 "AES128-GCM-SHA256"
+ #define TLS1_TXT_RSA_WITH_AES_256_GCM_SHA384 "AES256-GCM-SHA384"
+ #define TLS1_TXT_ECDHE_ECDSA_WITH_AES_128_CBC_SHA "ECDHE-ECDSA-AES128-SHA"
++#define TLS1_TXT_ECDHE_ECDSA_WITH_DES_192_CBC3_SHA "ECDHE-ECDSA-DES-CBC3-SHA"
++#define TLS1_TXT_ECDHE_RSA_WITH_DES_192_CBC3_SHA "ECDHE-RSA-DES-CBC3-SHA"
+ #define TLS1_TXT_ECDHE_ECDSA_WITH_AES_256_CBC_SHA "ECDHE-ECDSA-AES256-SHA"
+ #define TLS1_TXT_ECDHE_RSA_WITH_AES_128_CBC_SHA "ECDHE-RSA-AES128-SHA"
+ #define TLS1_TXT_ECDHE_RSA_WITH_AES_256_CBC_SHA "ECDHE-RSA-AES256-SHA"
+diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
+index a4a53cda6..9bc392a98 100644
+--- a/ssl/handshake_client.cc
++++ b/ssl/handshake_client.cc
+@@ -130,11 +130,17 @@ static bool ssl_write_client_cipher_list(const SSL_HANDSHAKE *hs, CBB *out,
+     const bool has_aes_hw = ssl->config->aes_hw_override
+                                 ? ssl->config->aes_hw_override_value
+                                 : EVP_has_aes_hardware();
++    // If the caller configured an explicit TLS 1.3 cipher order via
++    // `SSL_set_tls13_cipher_prefs`, honor it verbatim. Otherwise fall back to
++    // the default hardware- and policy-based ordering.
+     const bssl::Span<const uint16_t> ciphers =
+-        ssl->config->compliance_policy == ssl_compliance_policy_cnsa_202407
+-            ? bssl::Span<const uint16_t>(kCiphersCNSA)
+-            : (has_aes_hw ? bssl::Span<const uint16_t>(kCiphersAESHardware)
+-                          : bssl::Span<const uint16_t>(kCiphersNoAESHardware));
++        !ssl->config->tls13_cipher_ids.empty()
++            ? bssl::Span<const uint16_t>(ssl->config->tls13_cipher_ids)
++            : (ssl->config->compliance_policy == ssl_compliance_policy_cnsa_202407
++                   ? bssl::Span<const uint16_t>(kCiphersCNSA)
++                   : (has_aes_hw
++                          ? bssl::Span<const uint16_t>(kCiphersAESHardware)
++                          : bssl::Span<const uint16_t>(kCiphersNoAESHardware)));
+ 
+     for (auto cipher : ciphers) {
+       if (!ssl_add_tls13_cipher(&child, cipher,
+diff --git a/ssl/internal.h b/ssl/internal.h
+index 74c6c2e9c..f9f83730a 100644
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -3467,6 +3467,12 @@ struct SSL_CONFIG {
+   // accepted from the peer in decreasing order of preference.
+   Array<uint16_t> verify_sigalgs;
+ 
++  // tls13_cipher_ids, if not empty, is the explicit list of TLS 1.3 cipher
++  // suite IDs to advertise in the ClientHello, in the given order. When empty,
++  // the default hardware-based ordering is used. Configured via
++  // `SSL_set_tls13_cipher_prefs`.
++  Array<uint16_t> tls13_cipher_ids;
++
+   // srtp_profiles is the list of configured SRTP protection profiles for
+   // DTLS-SRTP.
+   UniquePtr<STACK_OF(SRTP_PROTECTION_PROFILE)> srtp_profiles;
+diff --git a/ssl/ssl_cipher.cc b/ssl/ssl_cipher.cc
+index 7799d79f9..8ba20af54 100644
+--- a/ssl/ssl_cipher.cc
++++ b/ssl/ssl_cipher.cc
+@@ -165,6 +165,18 @@ static constexpr SSL_CIPHER kCiphers[] = {
+         SSL_HANDSHAKE_MAC_SHA256,
+     },
+ 
++    // Cipher C008
++    {
++        TLS1_TXT_ECDHE_ECDSA_WITH_DES_192_CBC3_SHA,
++        "TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA",
++        SSL_CIPHER_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA,
++        SSL_kECDHE,
++        SSL_aECDSA,
++        SSL_3DES,
++        SSL_SHA1,
++        SSL_HANDSHAKE_MAC_DEFAULT,
++    },
++
+     // Cipher C009
+     {
+         TLS1_TXT_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+@@ -189,6 +201,18 @@ static constexpr SSL_CIPHER kCiphers[] = {
+         SSL_HANDSHAKE_MAC_DEFAULT,
+     },
+ 
++    // Cipher C012
++    {
++        TLS1_TXT_ECDHE_RSA_WITH_DES_192_CBC3_SHA,
++        "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA",
++        SSL_CIPHER_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,
++        SSL_kECDHE,
++        SSL_aRSA_SIGN,
++        SSL_3DES,
++        SSL_SHA1,
++        SSL_HANDSHAKE_MAC_DEFAULT,
++    },
++
+     // Cipher C013
+     {
+         TLS1_TXT_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+@@ -1046,6 +1070,8 @@ bool ssl_create_cipher_list(UniquePtr<SSLCipherPreferenceList> *out_cipher_list,
+       SSL_CIPHER_RSA_WITH_AES_256_CBC_SHA,
+       SSL_CIPHER_PSK_WITH_AES_256_CBC_SHA,
+       SSL_CIPHER_RSA_WITH_3DES_EDE_CBC_SHA,
++      SSL_CIPHER_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA,
++      SSL_CIPHER_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,
+   };
+ 
+   // Set up a linked list of ciphers.
+diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
+index e05f91bd9..26d766161 100644
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -2248,6 +2248,53 @@ int SSL_set_strict_cipher_list(SSL *ssl, const char *str) {
+                                 true /* strict */);
+ }
+ 
++int SSL_set_tls13_cipher_prefs(SSL *ssl, const char *str) {
++  auto *ssl_impl = FromOpaque(ssl);
++  if (!ssl_impl->config) {
++    OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
++    return 0;
++  }
++  if (str == nullptr) {
++    str = "";
++  }
++
++  // Resolve a cipher name (given as a [name, name + len) slice) to the wire ID
++  // of a TLS 1.3 cipher suite, or 0 if the token does not name one. This reuses
++  // BoringSSL's own cipher table so no cipher names or IDs are hard-coded here.
++  auto tls13_id = [](const char *name, size_t len) -> uint16_t {
++    for (const SSL_CIPHER &cipher : AllCiphers()) {
++      if (SSL_CIPHER_get_min_version(&cipher) == TLS1_3_VERSION &&
++          strlen(cipher.name) == len &&
++          OPENSSL_strncasecmp(cipher.name, name, len) == 0) {
++        return SSL_CIPHER_get_protocol_id(&cipher);
++      }
++    }
++    return 0;
++  };
++
++  // Walk the ':'-separated list and collect, in order, the wire IDs of the
++  // TLS 1.3 ciphers it names. There are only a handful of TLS 1.3 ciphers, so a
++  // small fixed buffer is more than enough.
++  uint16_t ids[16];
++  size_t num = 0;
++  for (const char *p = str; *p != '\0' && num < sizeof(ids) / sizeof(ids[0]);) {
++    const char *start = p;
++    while (*p != '\0' && *p != ':') {
++      p++;
++    }
++    uint16_t id = tls13_id(start, static_cast<size_t>(p - start));
++    if (id != 0) {
++      ids[num++] = id;
++    }
++    if (*p == ':') {
++      p++;
++    }
++  }
++
++  // An empty result clears any override and restores the default ordering.
++  return ssl_impl->config->tls13_cipher_ids.CopyFrom(Span(ids, num));
++}
++
+ const char *SSL_get_servername(const SSL *ssl, const int type) {
+   if (type != TLSEXT_NAMETYPE_host_name) {
+     return nullptr;

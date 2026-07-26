@@ -1,0 +1,46 @@
+diff --git a/ssl/ssl_privkey.cc b/ssl/ssl_privkey.cc
+index ae7c9bbd5..d800800e1 100644
+--- a/ssl/ssl_privkey.cc
++++ b/ssl/ssl_privkey.cc
+@@ -594,8 +594,13 @@ static bool sigalgs_unique(Span<const uint16_t> in_sigalgs) {
+   return true;
+ }
+ 
+-static bool set_sigalg_prefs(Array<uint16_t> *out, Span<const uint16_t> prefs) {
+-  if (!sigalgs_unique(prefs)) {
++static bool set_sigalg_prefs(Array<uint16_t> *out, Span<const uint16_t> prefs,
++                             bool allow_duplicates) {
++  // Verify (client-advertised) preferences are allowed to contain duplicates so
++  // that callers can reproduce a specific ClientHello signature_algorithms
++  // fingerprint verbatim. Signing preferences still reject duplicates, as a
++  // repeated entry there is a genuine configuration error.
++  if (!allow_duplicates && !sigalgs_unique(prefs)) {
+     return false;
+   }
+ 
+@@ -650,7 +655,8 @@ int SSL_CREDENTIAL_set1_signing_algorithm_prefs(SSL_CREDENTIAL *cred,
+     return 0;
+   }
+ 
+-  return set_sigalg_prefs(&cred_impl->sigalgs, Span(prefs, num_prefs));
++  return set_sigalg_prefs(&cred_impl->sigalgs, Span(prefs, num_prefs),
++                          /*allow_duplicates=*/false);
+ }
+ 
+ int SSL_CTX_set_signing_algorithm_prefs(SSL_CTX *ctx, const uint16_t *prefs,
+@@ -957,7 +963,7 @@ int SSL_set1_sigalgs_list(SSL *ssl, const char *str) {
+ int SSL_CTX_set_verify_algorithm_prefs(SSL_CTX *ctx, const uint16_t *prefs,
+                                        size_t num_prefs) {
+   return set_sigalg_prefs(&FromOpaque(ctx)->verify_sigalgs,
+-                          Span(prefs, num_prefs));
++                          Span(prefs, num_prefs), /*allow_duplicates=*/true);
+ }
+ 
+ int SSL_set_verify_algorithm_prefs(SSL *ssl, const uint16_t *prefs,
+@@ -969,5 +975,5 @@ int SSL_set_verify_algorithm_prefs(SSL *ssl, const uint16_t *prefs,
+   }
+ 
+   return set_sigalg_prefs(&ssl_impl->config->verify_sigalgs,
+-                          Span(prefs, num_prefs));
++                          Span(prefs, num_prefs), /*allow_duplicates=*/true);
+ }
