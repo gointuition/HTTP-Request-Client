@@ -8,3 +8,4 @@
 - [ ] **Other Browser Fingerprints** — TLS/HTTP2 fingerprint profiles for Firefox, Safari, Edge (enums defined, fingerprint data pending)
 - [ ] **Other Platforms** — Support for Windows / macOS / iOS / Android (enums defined, logic pending)
 - [ ] **Different Versions** — Support for different browser versions, default auto 
+- [ ] **Fixed Third-Party Libraries** — Fixed versions 

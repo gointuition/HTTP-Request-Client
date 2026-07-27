@@ -134,6 +134,19 @@ This produces:
 | Static library | `lib/static/libhttp2client.a` |
 | Test executables | `bin/test_GET`, `bin/test_POST` |
 
+## BoringSSL Patches
+
+Matching a real browser's TLS ClientHello byte-for-byte requires a few capabilities that stock BoringSSL does not expose. Rather than fork the submodule, the project keeps small, self-contained patches under [`patches/boringssl/`](patches/boringssl/) and applies them to the pristine checkout at build time.
+
+**How they are applied** — the `apply_third_party_patches()` function in [`CMakeLists.txt`](CMakeLists.txt) globs `patches/boringssl/*.patch`, applies them in filename order (`0001-`, `0002-`, …) with `git apply`, and skips any patch that `git apply --reverse --check` reports as already applied. This runs automatically at `cmake` configure time, is idempotent (re-running never double-applies), and needs no manual step.
+
+| Patch | Purpose |
+|-------|---------|
+| `0001-tls13-configurable-cipher-order.patch` | Adds `SSL_set_tls13_cipher_prefs(ssl, str)`, letting the caller advertise the TLS 1.3 cipher suites in an explicit order. Stock BoringSSL fixes the TLS 1.3 cipher order based on AES-hardware detection, which leaks the host's CPU capabilities into the fingerprint. The patch also re-enables three legacy 3DES suites (`ECDHE-ECDSA-DES-CBC3-SHA`, `ECDHE-RSA-DES-CBC3-SHA`, `DES-CBC3-SHA`) so the advertised cipher list can match the reference browser exactly. |
+| `0002-allow-duplicate-verify-sigalgs.patch` | Lets the client-advertised `signature_algorithms` list contain duplicate entries (e.g. `rsa_pss_rsae_sha384` twice), which some browsers emit and which BoringSSL otherwise rejects. Only the verify (ClientHello) preferences allow duplicates; signing preferences still reject them, since a repeated entry there is a genuine configuration error. |
+
+The browser-specific values these patches consume (cipher list, signature algorithms, extension toggles) live in the per-profile `BrowserFingerprint` structs in [`src/BrowserHandler.c`](src/BrowserHandler.c) and are applied in [`src/SSLHandler.c`](src/SSLHandler.c).
+
 ## C API
 
 ```c
