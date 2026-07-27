@@ -138,12 +138,12 @@ static int connectToProxy(Basket *basket, int sockfd) {
     LOG("DEBUG", "proxy response size: %zu", bytesRead);
 
     // check proxy response
-    if (strstr(proxyResponse, "HTTP/1.1 407") != NULL) {
+    if (strstr(proxyResponse, "HTTP/1.0 407") != NULL || strstr(proxyResponse, "HTTP/1.1 407") != NULL) {
         LOG("DEBUG", "407 proxy authorization failed");
         basket -> error = ERR_PROXY_AUTHORIZATION_FAILED;
         return -1;
     }
-    if (strstr(proxyResponse, "HTTP/1.1 200") == NULL || strstr(proxyResponse, "HTTP/1.1 200") == NULL) {
+    if (strstr(proxyResponse, "HTTP/1.0 200") == NULL && strstr(proxyResponse, "HTTP/1.1 200") == NULL) {
         LOG("ERROR", "unexpected CONNECT response from proxy server");
         basket -> error = ERR_PROXY_UNEXPECTED_RESPONSE;
         return -1;
