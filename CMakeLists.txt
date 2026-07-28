@@ -73,21 +73,59 @@ function(apply_third_party_patches LIB_NAME LIB_DIR)
     endforeach ()
 endfunction()
 
+# Clone a third-party repo at a fixed, pinned revision for reproducible builds.
+# REF may be a tag, branch, or commit hash. A valid existing checkout is reused
+# as-is (so local patches survive); an absent or partial directory is (re)cloned.
+function(clone_third_party_pinned NAME URL REF DIR)
+    # A valid, existing git checkout is treated as already provisioned. A leftover
+    # directory without a .git (e.g. from an interrupted/failed clone) is NOT a
+    # valid tree — trusting it would make the later patch step fail with
+    # "No such file or directory" — so remove it and re-clone.
+    if (EXISTS ${DIR})
+        if (EXISTS ${DIR}/.git)
+            return()
+        endif ()
+        message(WARNING "${NAME}: ${DIR} exists but is not a git checkout (partial clone?); removing and re-cloning")
+        file(REMOVE_RECURSE ${DIR})
+    endif ()
+    message(STATUS "${NAME} not found, cloning at pinned revision ${REF}...")
+    execute_process(
+            COMMAND git clone ${URL} ${DIR}
+            RESULT_VARIABLE GIT_CLONE_RESULT
+    )
+    if (NOT GIT_CLONE_RESULT EQUAL 0)
+        # Drop any partial clone so the next configure retries from scratch.
+        file(REMOVE_RECURSE ${DIR})
+        message(FATAL_ERROR "Failed to clone ${NAME} from ${URL} — check network connectivity to the host and re-run CMake")
+    endif ()
+    execute_process(
+            COMMAND git checkout --quiet --detach ${REF}
+            WORKING_DIRECTORY ${DIR}
+            RESULT_VARIABLE GIT_CHECKOUT_RESULT
+    )
+    if (NOT GIT_CHECKOUT_RESULT EQUAL 0)
+        file(REMOVE_RECURSE ${DIR})
+        message(FATAL_ERROR "Failed to check out pinned revision ${REF} for ${NAME}")
+    endif ()
+    message(STATUS "${NAME} pinned to ${REF}")
+endfunction()
+
+########## Pinned third-party revisions ####################
+# Fixed source versions for reproducible builds. Bump these deliberately (and
+# re-verify the local patches afterwards) instead of tracking upstream HEAD.
+set(BORINGSSL_GIT_REF 9134af991b3440140812a0c1bd466cd92b9e19ec) # 0.20250818.0 series
+set(BROTLI_GIT_REF    3efb30f96ba50389c4a2fcd9f884b7dbfbadebae) # v1.1.0 (bcr.0 + 6)
+set(ZLIB_GIT_REF      v1.3.1)                                   # latest stable release
+set(JANSSON_GIT_REF   96d160df90016066d04d493d1d69639474ba4f20) # v2.14.1 series
+set(ZSTD_GIT_REF      v1.5.7)                                   # latest stable release tag
+############################################################
+
 ##### Boringssl start
 
 set(BORINGSSL_DIR ${PROJECT_SOURCE_DIR}/third_party/boringssl)
 
-# check if Boringssl exists, if not, download it
-if (NOT EXISTS ${BORINGSSL_DIR})
-    message(STATUS "BoringSSL not found, downloading...")
-    execute_process(
-            COMMAND git clone https://github.com/google/boringssl.git ${BORINGSSL_DIR}
-            RESULT_VARIABLE GIT_RESULT
-    )
-    if (NOT GIT_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to download BoringSSL")
-    endif ()
-endif ()
+# Clone at the pinned revision if the source tree is absent.
+clone_third_party_pinned(BoringSSL https://github.com/google/boringssl.git ${BORINGSSL_GIT_REF} ${BORINGSSL_DIR})
 
 # apply local patches (patches/boringssl/*.patch) before building
 apply_third_party_patches(boringssl ${BORINGSSL_DIR})
@@ -105,16 +143,7 @@ add_subdirectory(${BORINGSSL_DIR})
 
 set(BROTLI_DIR ${PROJECT_SOURCE_DIR}/third_party/brotli)
 
-if (NOT EXISTS ${BROTLI_DIR})
-    message(STATUS "Brotli not found, downloading...")
-    execute_process(
-            COMMAND git clone https://github.com/google/brotli.git ${BROTLI_DIR}
-            RESULT_VARIABLE GIT_RESULT
-    )
-    if (NOT GIT_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to download Brotli")
-    endif ()
-endif ()
+clone_third_party_pinned(Brotli https://github.com/google/brotli.git ${BROTLI_GIT_REF} ${BROTLI_DIR})
 
 add_subdirectory(${BROTLI_DIR})
 
@@ -133,15 +162,7 @@ if (NOT ZLIB_FOUND)
 
     set(ZLIB_DIR ${PROJECT_SOURCE_DIR}/third_party/zlib)
 
-    if (NOT EXISTS ${ZLIB_DIR})
-        execute_process(
-                COMMAND git clone https://github.com/madler/zlib.git ${ZLIB_DIR}
-                RESULT_VARIABLE GIT_RESULT
-        )
-        if (NOT GIT_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to download zlib")
-        endif ()
-    endif ()
+    clone_third_party_pinned(zlib https://github.com/madler/zlib.git ${ZLIB_GIT_REF} ${ZLIB_DIR})
 
     # Only build the static library; skip examples/tests
     set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "Build zlib examples" FORCE)
@@ -177,17 +198,7 @@ endif ()
 
 set(JANSSON_DIR ${PROJECT_SOURCE_DIR}/third_party/jansson)
 
-# check if Jansson exists, if not, download it
-if (NOT EXISTS ${JANSSON_DIR})
-    message(STATUS "Jansson not found, downloading...")
-    execute_process(
-            COMMAND git clone https://github.com/akheron/jansson.git ${JANSSON_DIR}
-            RESULT_VARIABLE GIT_RESULT
-    )
-    if (NOT GIT_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to download Jansson")
-    endif ()
-endif ()
+clone_third_party_pinned(Jansson https://github.com/akheron/jansson.git ${JANSSON_GIT_REF} ${JANSSON_DIR})
 
 # Build Jansson as a static library
 set(JANSSON_BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
@@ -207,17 +218,7 @@ add_subdirectory(${JANSSON_DIR})
 
 set(ZSTD_DIR ${PROJECT_SOURCE_DIR}/third_party/zstd)
 
-# Check if Zstd exists, if not, download it
-if (NOT EXISTS ${ZSTD_DIR})
-    message(STATUS "Zstd not found, downloading...")
-    execute_process(
-            COMMAND git clone https://github.com/facebook/zstd.git ${ZSTD_DIR}
-            RESULT_VARIABLE GIT_RESULT
-    )
-    if (NOT GIT_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to download Zstd")
-    endif ()
-endif ()
+clone_third_party_pinned(Zstd https://github.com/facebook/zstd.git ${ZSTD_GIT_REF} ${ZSTD_DIR})
 
 # Build Zstd as a static library
 set(ZSTD_BUILD_STATIC ON CACHE BOOL "Build static library" FORCE)
