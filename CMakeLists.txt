@@ -47,12 +47,16 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
 # Patches are applied in filename order (use 0001-, 0002-, ... prefixes).
 # A patch that `git apply --reverse --check` accepts is already applied and skipped,
 # so re-running cmake never double-applies.
+#
+# --ignore-whitespace lets a LF patch apply onto a checkout that Git for Windows
+# converted to CRLF (default core.autocrlf=true); without it the LF context lines
+# fail to match the CRLF source and `git apply` reports "patch does not apply".
 function(apply_third_party_patches LIB_NAME LIB_DIR)
     file(GLOB PATCH_FILES ${PROJECT_SOURCE_DIR}/patches/${LIB_NAME}/*.patch)
     list(SORT PATCH_FILES)
     foreach (PATCH_FILE ${PATCH_FILES})
         execute_process(
-                COMMAND git apply --reverse --check ${PATCH_FILE}
+                COMMAND git apply --reverse --check --ignore-whitespace ${PATCH_FILE}
                 WORKING_DIRECTORY ${LIB_DIR}
                 RESULT_VARIABLE PATCH_ALREADY_APPLIED
                 ERROR_QUIET
@@ -62,7 +66,7 @@ function(apply_third_party_patches LIB_NAME LIB_DIR)
             continue()
         endif ()
         execute_process(
-                COMMAND git apply ${PATCH_FILE}
+                COMMAND git apply --ignore-whitespace ${PATCH_FILE}
                 WORKING_DIRECTORY ${LIB_DIR}
                 RESULT_VARIABLE PATCH_RESULT
         )
@@ -89,8 +93,12 @@ function(clone_third_party_pinned NAME URL REF DIR)
         file(REMOVE_RECURSE ${DIR})
     endif ()
     message(STATUS "${NAME} not found, cloning at pinned revision ${REF}...")
+    # --config core.autocrlf=false/core.eol=lf is persisted into the new repo
+    # before checkout, so the working tree keeps LF endings on Windows too. This
+    # keeps the LF patches in patches/ applying cleanly (Git for Windows would
+    # otherwise check out CRLF and break `git apply`).
     execute_process(
-            COMMAND git clone ${URL} ${DIR}
+            COMMAND git clone --config core.autocrlf=false --config core.eol=lf ${URL} ${DIR}
             RESULT_VARIABLE GIT_CLONE_RESULT
     )
     if (NOT GIT_CLONE_RESULT EQUAL 0)
