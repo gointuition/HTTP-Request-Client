@@ -133,28 +133,47 @@ if (process.platform === 'win32') {
   // so no external zlib DLL is needed at runtime.
 
   // libhttp2client.dll is built with MinGW and depends on MinGW runtime DLLs
-  // (libwinpthread-1.dll, libgcc_s_seh-1.dll, etc.). Locate them via gendef's
-  // PATH (which is in MinGW/bin) and copy them next to the addon.
+  // (libwinpthread-1.dll, libgcc_s_seh-1.dll, libstdc++-6.dll -- the latter two
+  // because BoringSSL is C++). These MUST match the compiler that built the DLL:
+  // a stale/older copy left next to the addon makes it fail to load at runtime
+  // with the cryptic "The specified procedure could not be found" (a newer GCC
+  // emits references to newer libstdc++/libgcc exports that an older runtime
+  // lacks). So resolve them from the SAME MinGW bin as the C compiler, ALWAYS
+  // overwrite, and hard-fail if they cannot be found.
   const mingwRuntimes = [
     'libwinpthread-1.dll',
     'libgcc_s_seh-1.dll',
     'libstdc++-6.dll'
   ]
-  // Find MinGW bin directory from gendef location on PATH
-  const whereGendef = spawnSync('where', ['gendef'], { stdio: 'pipe', env: process.env })
-  if (!whereGendef.error && whereGendef.status === 0) {
-    const gendefPath = whereGendef.stdout.toString().trim().split(/\r?\n/)[0]
-    const mingwBin = path.dirname(gendefPath)
-    for (const rt of mingwRuntimes) {
-      const src = path.join(mingwBin, rt)
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, path.join(destDir, rt))
+  // The C library is built by cc/gcc; its runtime DLLs live in the same <mingw>/bin.
+  // Prefer the compiler's location (guaranteed to match), fall back to gendef.
+  function mingwBinDir() {
+    for (const tool of ['cc', 'gcc', 'gendef']) {
+      const w = spawnSync('where', [tool], { stdio: 'pipe', env: process.env })
+      if (!w.error && w.status === 0) {
+        const first = w.stdout.toString().trim().split(/\r?\n/)[0]
+        if (first) return path.dirname(first)
       }
     }
-  } else {
-    console.warn('build-addon: warning - gendef not on PATH, cannot auto-copy ' +
-      'MinGW runtime DLLs. If the addon fails to load, ensure MinGW bin is on PATH ' +
-      'or copy libwinpthread-1.dll / libgcc_s_seh-1.dll to ' + destDir)
+    return null
+  }
+  const mingwBin = mingwBinDir()
+  if (!mingwBin) {
+    console.error('build-addon: cannot locate the MinGW bin directory (cc/gcc/gendef ' +
+      'not on PATH). Run this from an MSYS2 MinGW64 shell so the runtime DLLs that ' +
+      'match the C library can be copied next to the addon.')
+    process.exit(1)
+  }
+  for (const rt of mingwRuntimes) {
+    const src = path.join(mingwBin, rt)
+    if (!fs.existsSync(src)) {
+      console.error('build-addon: expected MinGW runtime ' + src + ' but it is ' +
+        'missing. Install the toolchain (pacman -S mingw-w64-x86_64-gcc) or copy a ' +
+        'matching ' + rt + ' next to ' + destDir)
+      process.exit(1)
+    }
+    // Always overwrite so a stale runtime from a previous toolchain never lingers.
+    fs.copyFileSync(src, path.join(destDir, rt))
   }
 }
 
