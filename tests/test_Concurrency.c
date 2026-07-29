@@ -106,7 +106,11 @@ int main(int argc, char *argv[]) {
     // Writing to a peer-closed socket raises SIGPIPE, which would kill this
     // standalone process. Ignore it so SSL_write surfaces the error as a return
     // value instead (the Node.js/Java runtimes do this implicitly).
+    // SIGPIPE is POSIX-only; on Windows/MinGW it is undefined (a write to a
+    // closed socket already surfaces as an error), so guard the call.
+#ifdef SIGPIPE
     signal(SIGPIPE, SIG_IGN);
+#endif
 
     initialiseEnv();
 
