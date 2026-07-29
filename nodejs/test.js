@@ -1,3 +1,10 @@
+// libuv's worker thread pool defaults to 4, so 8 blocking native calls would run
+// in two batches of 4 (watch the per-request ms: the last 4 wait for a free worker).
+// Bump the pool to at least the concurrency BEFORE anything uses libuv, so all 8
+// requestAsync() calls get their own worker and run truly in parallel.
+// Equivalent to launching with: UV_THREADPOOL_SIZE=8 node test.js
+process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || '8';
+
 const httpClient = require('./index.js');
 // const httpClient = require('');
 
