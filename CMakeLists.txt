@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.29)
-project(Http2 VERSION 1.0.0 LANGUAGES C)
+# ASM is enabled here (not just C) so the GAS assembler rule is set up once at the
+# top level using the already-identified GNU compiler. Third parties that turn on
+# assembly in a nested project() scope (e.g. zstd's huf_decompress_amd64.S) then
+# inherit a working CMAKE_ASM_COMPILE_OBJECT; otherwise CMake's ASM detection can
+# misfire under Ninja/MinGW and fail the generate step with
+# "required internal CMake variable not set: CMAKE_ASM_COMPILE_OBJECT".
+project(Http2 VERSION 1.0.0 LANGUAGES C ASM)
 
 set(CMAKE_C_STANDARD 17)
 
