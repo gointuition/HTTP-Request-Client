@@ -4,12 +4,12 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 
 ## Features
 
-- **HTTP/2** — full implementation: multiplexed streams, HPACK dynamic table, flow control, SETTINGS/GOAWAY
+- **HTTP/2** — full implementation: concurrent stream multiplexing over a shared connection (per-connection reader thread), HPACK dynamic table, flow control, SETTINGS/PING ACK, GOAWAY
 - **TLS 1.3** — session resumption with `pre_shared_key` (NewSessionTicket callback)
 - **TLS fingerprint** — GREASE, ECH, ALPS, cert compression (Brotli), signature algorithms alignment
 - **Compression** — gzip, deflate, Brotli, Zstd response decompression
 - **Proxy** — HTTPS CONNECT tunnel with authorization
-- **Session pool** — connection reuse with configurable expiration (up to 1024 concurrent sessions)
+- **Session pool** — thread-safe connection reuse with configurable expiration (up to 1024 concurrent sessions); concurrent same-host requests share one multiplexed connection
 - **Cross-language** — native bindings for [Node.js](nodejs/) (N-API), [Python](python/) (cffi), [Java](java/) (JNI)
 
 ## Architecture
@@ -156,6 +156,8 @@ The browser-specific values these patches consume (cipher list, signature algori
 void initialiseEnv(void);
 
 // 2. Send request (two-step, thread-safe)
+//    handleRequest may be called concurrently from multiple threads; same-host
+//    requests share one HTTP/2 connection and are multiplexed on separate streams.
 //    Step 1: get result pointer and length
 //    requestJSONString: JSON config (see format below)
 //    outLen: output parameter for response JSON length

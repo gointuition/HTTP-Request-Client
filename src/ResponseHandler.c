@@ -111,186 +111,54 @@ typedef enum {
     ENCODING_ZSTD = 8
 } ContentEncoding;
 
-static void processFrame(Basket *basket, unsigned char *payload, uint32_t length,
-                         uint8_t type, uint8_t flags, uint32_t streamId,
-                         HpackContext *ctx, int *isStreamEnded,
-                         unsigned char **combinedPayload, size_t *combinedPayloadSize);
-static void handleDataFrame(Basket *basket, unsigned char *payload, uint32_t length, unsigned char **combinedPayload, size_t *combinedPayloadSize);
-static void handleHeadersFrame(Basket *basket, unsigned char *payload, uint32_t length, uint8_t flags, HpackContext *ctx);
-static void handleRST_STREAMFrame(Basket *basket, unsigned char *payload, uint32_t length, uint32_t streamId);
+static void handleDataFrame(Stream *stream, unsigned char *payload, uint32_t length);
+static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t length, uint8_t flags, HpackContext *ctx);
+static void handleRST_STREAMFrame(Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId);
 static void handleSettingsFrame(unsigned char *payload, uint32_t length);
 static void handleWindowUpdateFrame(unsigned char *payload, uint32_t length, uint32_t streamId);
-static void handleGoAwayFrame(Basket *basket, unsigned char *payload, uint32_t length);
+static void handleGoAwayFrame(Session *session, unsigned char *payload, uint32_t length);
 static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPayload, size_t combinedPayloadSize);
 // static HpackContext *initHpackContext(Basket *basket);
-static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t length, HpackContext *ctx);
+static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t length, HpackContext *ctx);
 static void getHeaderFromTable(size_t index, char **name, char **value, HpackContext *ctx);
 static void freeResponseHeader(ResponseHeader *header);
-static void addToDynamicTable(Basket *basket, HpackContext *ctx, const char *name, const char *value);
+static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *name, const char *value);
 static const char* getSettingsName(uint16_t id);
 static const char* getErrorName(uint32_t code);
 static ContentEncoding detectContentEncoding(Basket *basket);
 
-void receiveResponse(Basket *basket) {
-    basket -> response.headers = (ResponseHeader *) malloc(sizeof(ResponseHeader) * RESPONSE_HEADERS_MAX_SIZE);
-    if (!basket -> response.headers) {
-        basket -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
-        return;
-    }
-
-    // HpackContext *hpackCtx = initHpackContext(basket);
-    HpackContext *hpackCtx = basket -> session -> hpackCtx;
-    if (!hpackCtx && basket -> error.code != NULL) {
-        return;
-    }
-
-    unsigned char *fullResponse = NULL;
-    size_t fullResponseSize = 0;
-
-    unsigned char *combinedPayload = NULL;
-    size_t combinedPayloadSize = 0;
-
-    int totalBytes = 0;
-
-    int isStreamEnded = 0;
-
-    // set socket to non-blocking
-    int fd = SSL_get_fd(basket -> session -> ssl);
-    setSocketNonBlocking(fd);
-
-    int timeout = 0;
-    int maxTimeout = basket -> responseReadingTimeoutInMilliseconds;
-
-    LOG("DEBUG", "waiting for response...");
-    while (!isStreamEnded && basket -> error.code == NULL) {
-        if (timeout >= maxTimeout) {
-            LOG("ERROR", "no response after %dms timeout", maxTimeout);
-            basket -> error = totalBytes > 0 ? ERR_RESPONSE_NO_CONTENT_AFTER_READING_TIMEOUT : ERR_RESPONSE_PARTIAL_CONTENT_AFTER_READING_TIMEOUT;
-            basket -> response.payload = NULL;
-            break;
-        }
-        unsigned char buffer[4096];
-        int bytesRead = SSL_read(basket -> session -> ssl, buffer, sizeof(buffer));
-
-        if (bytesRead > 0) {
-            timeout = 0;
-
-            // use realloc to extend dynamically
-            unsigned char *newResponse = realloc(fullResponse, fullResponseSize + bytesRead);
-            if (newResponse == NULL) {
-                if (fullResponse != NULL) { free(fullResponse); }
-                LOG("ERROR", "response content memory allocation failed");
-                basket -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
-                break;
-            }
-
-            fullResponse = newResponse;
-            memcpy(fullResponse + fullResponseSize, buffer, bytesRead);
-            fullResponseSize += bytesRead;
-            totalBytes += bytesRead;
-
-            LOG("DEBUG", "Received %d bytes, total: %d, consecutive_empty: %d", bytesRead, totalBytes, timeout);
-
-            /**
-             * frame header: 3 + 2 + 4 = 9
-            +-----------------------------------------------+
-            |                 Length (24)                   |   ← 3 bytes frameLength 24 bytes, max 2^24 - 1
-            +---------------+---------------+---------------+
-            |   Type (8)    |   Flags (8)   |                   ← 2 bytes
-            +-+-------------+---------------+---------------+
-            |R|                 Stream Identifier (31)      |   ← 4 bytes
-            +=+================================== ===========+
-            |                   Frame Payload (0...)            ←
-            +---------------------------------------------------------------+
-
-            unsigned char frame[] = {
-                0x00, 0x00, 0x05,  // Length = 5 (payload 5 bytes)
-                0x00,              // Type = 0 (DATA)
-                0x01,              // Flags = 1 (END_STREAM)
-                0x00, 0x00, 0x00, 0x01,  // Stream ID = 1
-                0x48, 0x65, 0x6C, 0x6C, 0x6F  // Payload: "Hello" (5 bytes)
-            };
-            */
-            // only handle new received data, but one frame may be chunked, after collecting all chunks, parse
-            // size_t offset = fullResponseSize - bytesRead - frameChunkSize;
-            size_t offset = 0;
-            while (offset + 9 <= fullResponseSize) {
-                // Parse Frame Header
-                // Big-Endian parsing
-                uint32_t frameLength = (fullResponse[offset] << 16) | (fullResponse[offset+1] << 8) | fullResponse[offset+2];
-                uint8_t frameType = fullResponse[offset+3];
-                uint8_t frameFlags = fullResponse[offset+4];
-                uint32_t streamId = ((fullResponse[offset+5] & 0x7F) << 24) | (fullResponse[offset+6] << 16) | (fullResponse[offset+7] << 8) | fullResponse[offset+8];
-
-                // Check if full frame is available TODO different from below in #receiveResponseS
-                if (offset + 9 + frameLength > fullResponseSize) {
-                    break; // Wait for more data
-                }
-
-                unsigned char *payload = fullResponse + offset + 9;
-
-                // Process Frame
-                processFrame(basket, payload, frameLength, frameType, frameFlags, streamId, hpackCtx, &isStreamEnded, &combinedPayload, &combinedPayloadSize);
-
-                if (basket -> error.code != NULL) { break; }
-
-                offset += 9 + frameLength;
-            }
-
-            // Remove processed bytes from buffer (optional optimization: use ring buffer or move remaining)
-            if (offset > 0) {
-                size_t remaining = fullResponseSize - offset;
-                if (remaining > 0) {
-                    memmove(fullResponse, fullResponse + offset, remaining);
-                }
-                fullResponseSize = remaining;
-            }
-        } else if (bytesRead == 0) {
-            // Connection closed TODO handle after too long time, free memory
-            LOG("ERROR", "connection closed");
-            break;
-        } else {
-            int err = SSL_get_error(basket -> session -> ssl, bytesRead);
-            if (err == SSL_ERROR_WANT_READ) {
-                sleepMicroseconds(10000);
-                LOG("DEBUG", "waited %dms", timeout);
-                timeout += 10; // 10 ms
-            } else {
-                basket -> error = ERR_RESPONSE_READING_UNKNOWN_ERROR;
-                break;
-            }
-        }
-    }
-
-    // decompress response
-    if (basket -> error.code == NULL) {
-        finalizeResponsePayload(basket, combinedPayload, combinedPayloadSize);
-    }
-
-    if (fullResponse) { free(fullResponse); }
-
-    // if (hpackCtx) { freeHpackContext(hpackCtx); }
-    // reset socket flag
-    setSocketBlocking(fd);
-}
-
-static void processFrame(Basket *basket, unsigned char *payload, uint32_t length,
-                         uint8_t type, uint8_t flags, uint32_t streamId,
-                         HpackContext *ctx, int *isStreamEnded,
-                         unsigned char **combinedPayload, size_t *combinedPayloadSize) {
+// Process a single fully-buffered HTTP/2 frame. Called from the connection
+// reader thread with `stream` locked (or NULL for connection-level frames and
+// frames targeting an unknown/closed stream). HEADERS frames are always decoded
+// — into a scratch stream when the target is NULL — so the shared HPACK dynamic
+// table stays in sync with the arrival order on the wire.
+void handleStreamFrame(Session *session, Stream *stream,
+                       unsigned char *payload, uint32_t length,
+                       uint8_t type, uint8_t flags, uint32_t streamId) {
 
     LOG("DEBUG", "[Frame] Type: %u, Flags: 0x%02x, Stream: %u, Len: %u", type, flags, streamId, length);
 
     switch (type) {
         case 0x0: // DATA
-            handleDataFrame(basket, payload, length, combinedPayload, combinedPayloadSize);
+            if (stream) { handleDataFrame(stream, payload, length); }
             break;
-        case 0x1: // HEADERS
-            handleHeadersFrame(basket, payload, length, flags, ctx);
+        case 0x1: { // HEADERS
+            if (stream) {
+                handleHeadersFrame(stream, payload, length, flags, session -> hpackCtx);
+            } else {
+                // Unknown/closed stream: decode into a scratch stream purely to
+                // advance the shared HPACK dynamic table; discard the headers.
+                Stream scratch;
+                memset(&scratch, 0, sizeof(scratch));
+                handleHeadersFrame(&scratch, payload, length, flags, session -> hpackCtx);
+            }
             break;
+        }
         case 0x3: // RST_STREAM
-            *isStreamEnded = 1;
-            handleRST_STREAMFrame(basket, payload, length, streamId);
+            if (stream) {
+                handleRST_STREAMFrame(stream, payload, length, streamId);
+                stream -> isEnded = 1;
+            }
             break;
         case 0x4: // SETTINGS
             handleSettingsFrame(payload, length);
@@ -299,39 +167,77 @@ static void processFrame(Basket *basket, unsigned char *payload, uint32_t length
             handleWindowUpdateFrame(payload, length, streamId);
             break;
         case 0x7: // GOAWAY
-            handleGoAwayFrame(basket, payload, length);
+            handleGoAwayFrame(session, payload, length);
             break;
         default:
             LOG("WARN", "Unknown Frame Type: %u", type);
             break;
     }
 
-    // Check for Stream End
-    if (streamId > 0 && streamId % 2 == 1) {
-        if ((type == 0x0 || type == 0x1) && (flags & 0x1)) {
-            *isStreamEnded = 1;
-            LOG("DEBUG", "Stream %u ended.", streamId);
-        }
-        if (type == 0x3) { // RST_STREAM
-            *isStreamEnded = 1;
-            const uint32_t errorCode = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
-            LOG("DEBUG", "RST_STREAM received. Error Code: 0x%x", errorCode);
-        }
+    // END_STREAM flag on DATA/HEADERS completes the stream.
+    if (stream && (type == 0x0 || type == 0x1) && (flags & 0x1)) {
+        stream -> isEnded = 1;
+        LOG("DEBUG", "Stream %u ended.", streamId);
     }
 }
 
-static void handleDataFrame(Basket *basket, unsigned char *payload, uint32_t length,
-                            unsigned char **combinedPayload, size_t *combinedPayloadSize) {
-    if (length == 0) return;
+void finalizeStreamIntoBasket(Basket *basket, Stream *stream) {
+    pthread_mutex_lock(&stream -> lock);
 
-    unsigned char *newPayload = realloc(*combinedPayload, *combinedPayloadSize + length);
-    if (!newPayload) {
-        basket -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+    // On any stream/connection error, propagate it and leave the buffers for
+    // freeStreamBuffers. Retryable errors (GOAWAY/SETTINGS_TIMEOUT) let the
+    // caller retry with a clean basket.
+    if (stream -> error.code != NULL) {
+        basket -> error = stream -> error;
+        pthread_mutex_unlock(&stream -> lock);
         return;
     }
-    *combinedPayload = newPayload;
-    memcpy(*combinedPayload + *combinedPayloadSize, payload, length);
-    *combinedPayloadSize += length;
+
+    // Transfer ownership of headers and payload out of the stream.
+    basket -> response.headers = stream -> headers;
+    basket -> response.numHeaders = stream -> numHeaders;
+    stream -> headers = NULL;
+    stream -> numHeaders = 0;
+
+    unsigned char *combinedPayload = stream -> combinedPayload;
+    size_t combinedPayloadSize = stream -> combinedPayloadSize;
+    stream -> combinedPayload = NULL;
+    stream -> combinedPayloadSize = 0;
+
+    pthread_mutex_unlock(&stream -> lock);
+
+    // Decompression can be slow; run it without holding the stream lock.
+    finalizeResponsePayload(basket, combinedPayload, combinedPayloadSize);
+}
+
+void freeStreamBuffers(Stream *stream) {
+    if (!stream) { return; }
+    if (stream -> headers) {
+        for (size_t i = 0; i < stream -> numHeaders; i++) {
+            freeResponseHeader(&stream -> headers[i]);
+        }
+        free(stream -> headers);
+        stream -> headers = NULL;
+        stream -> numHeaders = 0;
+    }
+    if (stream -> combinedPayload) {
+        free(stream -> combinedPayload);
+        stream -> combinedPayload = NULL;
+        stream -> combinedPayloadSize = 0;
+    }
+}
+
+static void handleDataFrame(Stream *stream, unsigned char *payload, uint32_t length) {
+    if (length == 0) return;
+
+    unsigned char *newPayload = realloc(stream -> combinedPayload, stream -> combinedPayloadSize + length);
+    if (!newPayload) {
+        stream -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+        return;
+    }
+    stream -> combinedPayload = newPayload;
+    memcpy(stream -> combinedPayload + stream -> combinedPayloadSize, payload, length);
+    stream -> combinedPayloadSize += length;
 }
 
 /**
@@ -377,7 +283,7 @@ With priority
     0x82, 0x84, 0x87, 0x41, 0x8a, 0x08, 0x9d, 0x5c, 0x0b, 0x81
 }
  */
-static void handleHeadersFrame(Basket *basket, unsigned char *payload, uint32_t length, uint8_t flags, HpackContext *ctx) {
+static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t length, uint8_t flags, HpackContext *ctx) {
     if (!ctx) return;
 
     unsigned char *payloadStart = payload;
@@ -387,7 +293,7 @@ static void handleHeadersFrame(Basket *basket, unsigned char *payload, uint32_t 
     size_t padLength = 0;
     if (flags & 0x08) {
         if (payloadSize < 1) {
-            basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+            stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
             return;
         }
         padLength = payloadStart[0];
@@ -398,7 +304,7 @@ static void handleHeadersFrame(Basket *basket, unsigned char *payload, uint32_t 
     // Skip Priority if present (0x20)
     if (flags & 0x20) {
         if (payloadSize < 5) {
-            basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+            stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
             return;
         }
         payloadStart += 5;
@@ -408,29 +314,29 @@ static void handleHeadersFrame(Basket *basket, unsigned char *payload, uint32_t 
     // Remove padding from the end
     if (padLength > 0) {
         if (padLength > payloadSize) {
-            basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+            stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
             return;
         }
         payloadSize -= padLength;
     }
 
     // Call the existing decoder logic, passing ctx
-    decodeHeadersFrame(basket, payloadStart, payloadSize, ctx);
+    decodeHeadersFrame(stream, payloadStart, payloadSize, ctx);
 }
 
-static void handleRST_STREAMFrame(Basket *basket, unsigned char *payload, uint32_t length, uint32_t streamId) {
+static void handleRST_STREAMFrame(Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId) {
     // RST_STREAM frame payload is 4 bytes, including a 32 bits error code
     if (length == 4) {
         const uint32_t errorCode = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
         const char *errorName = getErrorName(errorCode);
         LOG("WARN", "RST_STREAM received for Stream %u. Error Code: 0x%x (%s)",
             streamId, errorCode, errorName);
-        basket -> error = ERR_RESPONSE_RST_STREAM_ERROR;
-        basket -> error.msg = errorName;
+        stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
+        stream -> error.msg = errorName;
     } else {
         LOG("ERROR", "Invalid RST_STREAM frame length: %u", length);
-        basket -> error = ERR_RESPONSE_RST_STREAM_ERROR;
-        basket -> error.msg = "Invalid RST_STREAM frame length";
+        stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
+        stream -> error.msg = "Invalid RST_STREAM frame length";
     }
 }
 
@@ -487,17 +393,20 @@ static void handleWindowUpdateFrame(unsigned char *payload, uint32_t length, uin
 |                  Additional Debug Data (*)     |
 +---------------------------------------------------------------+
 */
-static void handleGoAwayFrame(Basket *basket, unsigned char *payload, uint32_t length) {
+static void handleGoAwayFrame(Session *session, unsigned char *payload, uint32_t length) {
     if (length >= 8) {
         uint32_t lastStreamId = ((payload[0] & 0x7F) << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
         uint32_t errorCode = (payload[4] << 24) | (payload[5] << 16) | (payload[6] << 8) | payload[7];
         LOG("DEBUG", "GOAWAY: Last Stream %u, Error 0x%x (%s)", lastStreamId, errorCode, getErrorName(errorCode));
-        if (errorCode == 0x0 && basket -> response.numHeaders == 0) { // tls.peet.ws will close the connection every time
-            basket -> error = ERR_SESSION_GO_AWAY;
-        }
+        // Mark the connection so it is no longer reused; the reader then fails
+        // any still-pending streams (those without a response yet) with this
+        // error so their request threads can retry on a fresh connection.
         if (errorCode == 0x4) {
-            basket -> error = ERR_SESSION_SETTINGS_TIMEOUT;
+            session -> connError = ERR_SESSION_SETTINGS_TIMEOUT;
+        } else {
+            session -> connError = ERR_SESSION_GO_AWAY;
         }
+        session -> goingAway = 1;
     }
 }
 
@@ -586,7 +495,7 @@ static const char* getSettingsName(uint16_t id) {
     return NULL;
 }
 
-static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t length, HpackContext *ctx) {
+static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t length, HpackContext *ctx) {
     if (!payload || length == 0) { return; }
 
     LOG("DEBUG", "Response HEADERS frame: raw payload (%zu bytes): ", length);
@@ -596,12 +505,12 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
 //    if (length < 32) { printf("..."); }
 //    printf("");
 
-    basket -> response.numHeaders = 0;
+    stream -> numHeaders = 0;
     size_t pos = 0;
     while (pos < length) {
         if (pos + 1 > length) {
             LOG("ERROR", "Response HEADERS frame: incomplete header field at position %zu", pos);
-            basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+            stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
             break;
         }
 
@@ -636,7 +545,7 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
             size_t index = hpackDecodeInteger(payload, &pos, 7, length);
             if (index == 0) {
                 LOG("ERROR", "Response HEADERS frame: invalid index 0");
-                basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+                stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                 continue;
             }
             // Validate dynamic table index (indices >= static table size refer to dynamic table)
@@ -646,7 +555,7 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
                 if (dynamicIndex >= ctx -> dynamicTableSize) {
                     LOG("ERROR", "Response HEADERS frame: dynamic table index %zu out of range (table size %zu)",
                         dynamicIndex, ctx -> dynamicTableSize);
-                    basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+                    stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                     continue;
                 }
             }
@@ -679,7 +588,7 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
                 resHeader.name = hpackDecodeString(payload, &pos, length);
                 if (!resHeader.name) {
                     LOG("ERROR", "Failed to decode header name");
-                    basket -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+                    stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                     isError = 1;
                     break;
                 }
@@ -690,7 +599,7 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
             if (!resHeader.value) {
                 LOG("ERROR", "Failed to decode header value");
                 freeResponseHeader(&resHeader);
-                basket->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+                stream->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                 break;
             }
 
@@ -734,7 +643,7 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
                 resHeader.name = hpackDecodeString(payload, &pos, length);
                 if (!resHeader.name) {
                     LOG("ERROR", "Failed to decode header name");
-                    basket->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+                    stream->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                     break;
                 }
             }
@@ -744,7 +653,7 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
             if (!resHeader.value) {
                 LOG("ERROR", "Failed to decode header value");
                 freeResponseHeader(&resHeader);
-                basket->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
+                stream->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                 break;
             }
 
@@ -790,17 +699,23 @@ static void decodeHeadersFrame(Basket *basket, unsigned char *payload, size_t le
 
         // Add to dynamic table if needed
         if (shouldAddToDynamicTable && resHeader.name && resHeader.value) {
-            addToDynamicTable(basket, ctx, resHeader.name, resHeader.value);
+            addToDynamicTable(stream, ctx, resHeader.name, resHeader.value);
         }
 
-        // Store header in response
-        if (basket -> response.numHeaders < RESPONSE_HEADERS_MAX_SIZE) {
-            basket -> response.headers[basket -> response.numHeaders++] = resHeader;
+        // Store header in the stream (a NULL headers buffer means this is a
+        // scratch decode for an unknown/closed stream: keep the HPACK table in
+        // sync but discard the header itself).
+        if (stream -> headers) {
+            if (stream -> numHeaders < RESPONSE_HEADERS_MAX_SIZE) {
+                stream -> headers[stream -> numHeaders++] = resHeader;
+            } else {
+                LOG("WARN", "Response headers limit reached (%d), discarding remaining",
+                    RESPONSE_HEADERS_MAX_SIZE);
+                freeResponseHeader(&resHeader);
+                break;
+            }
         } else {
-            LOG("WARN", "Response headers limit reached (%d), discarding remaining",
-                RESPONSE_HEADERS_MAX_SIZE);
             freeResponseHeader(&resHeader);
-            break;
         }
 
         if (isError == 1) {
@@ -845,7 +760,7 @@ static void freeResponseHeader(ResponseHeader *header) {
     }
 }
 
-static void addToDynamicTable(Basket *basket, HpackContext *ctx, const char *name, const char *value) {
+static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *name, const char *value) {
     size_t entrySize = strlen(name) + strlen(value) + 32; // 32 HPack overhead
 
     // remove oldest entry
@@ -865,7 +780,7 @@ static void addToDynamicTable(Basket *basket, HpackContext *ctx, const char *nam
         HpackTableEntry *newTable = realloc(ctx -> dynamicTable, newCapacity * sizeof(HpackTableEntry));
         if (!newTable) {
             LOG("ERROR", "Response HEADERS frame: dynamic table capacity realloc failed");
-            basket -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+            stream -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
             return;
         }
         ctx -> dynamicTable = newTable;

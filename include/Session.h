@@ -34,6 +34,18 @@ void destroySharedMemoryPool(SharedSessionPool *pool);
 
 void handleSession(Basket *basket);
 
+// Allocate a Stream for this request, assign an odd client stream id, and
+// register it in the session's stream registry (increments inflightCount).
+// Returns NULL on failure (basket->error is set).
+Stream* registerStream(Basket *basket);
+
+// Wait until the stream ends or the response-reading timeout elapses. Returns 0
+// on completion, -1 on timeout (basket->error is set to a timeout error).
+int awaitStream(Basket *basket, Stream *stream);
+
+// Remove the stream from the registry (decrements inflightCount) and free it.
+void unregisterStream(Basket *basket, Stream *stream);
+
 void cleanupTargetSession(Basket *basket);
 
 void cleanupSessions(int isAll);

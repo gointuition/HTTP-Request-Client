@@ -38,6 +38,25 @@ class HttpClient {
     }
 
     /**
+     * Send an HTTP/2 request asynchronously. The blocking native call runs on a
+     * libuv worker thread, so multiple pending requests execute concurrently
+     * (same-host requests are multiplexed over one HTTP/2 connection).
+     * @param {Object|string} config - Request configuration object or JSON string
+     * @returns {Promise<string>} Resolves with the response JSON string
+     */
+    requestAsync(config) {
+        if (!this.initialized) {
+            this.init();
+        }
+
+        // Convert object to JSON string if needed
+        const jsonString = typeof config === 'string' ? config : JSON.stringify(config);
+
+        // Call native addon (returns a Promise resolving to { data })
+        return addon.requestAsync(jsonString).then((result) => result.data);
+    }
+
+    /**
      * Cleanup resources
      */
     cleanup() {

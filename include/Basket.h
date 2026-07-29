@@ -97,6 +97,25 @@ typedef struct {
     size_t dynamicTableMaxSize;
 } HpackContext;
 
+// Maximum number of concurrent streams multiplexed over a single connection.
+#define MAX_CONCURRENT_STREAMS_PER_SESSION 256
+
+// Per-stream state for HTTP/2 multiplexing. The connection reader thread
+// demultiplexes inbound frames by stream id into these structures; the
+// requesting thread waits on `cond` until `isEnded` is set, then copies the
+// accumulated headers/payload into its Basket.
+typedef struct Stream {
+    uint32_t            streamId;
+    int                 isEnded;
+    ResponseHeader      *headers;
+    size_t              numHeaders;
+    unsigned char       *combinedPayload;
+    size_t              combinedPayloadSize;
+    Error               error;
+    pthread_mutex_t     lock;
+    pthread_cond_t      cond;
+} Stream;
+
 typedef struct {
     char                scheme[16];
     char                host[256];
@@ -115,6 +134,16 @@ typedef struct {
     SSL                 *ssl;
     HpackContext        *hpackCtx;
     TLSConnInfo         *connInfo; // heap-allocated, lives for session lifetime (used by newSessionCallback)
+    // ── HTTP/2 multiplexing / concurrency ──
+    pthread_mutex_t     writeMutex;     // serialize SSL_write across concurrent streams
+    pthread_mutex_t     streamsMutex;   // guard the stream registry below
+    Stream              *streams[MAX_CONCURRENT_STREAMS_PER_SESSION];
+    int                 inflightCount;  // streams currently awaiting completion
+    pthread_t           reader;         // per-connection frame reader thread
+    volatile int        readerRunning;  // reader loop control flag
+    int                 readerStarted;  // whether pthread_create succeeded (join guard)
+    volatile int        goingAway;      // set on GOAWAY / connection loss; blocks reuse
+    Error               connError;      // connection-level error (GOAWAY reason), applied to streams
 } Session;
 
 typedef struct {

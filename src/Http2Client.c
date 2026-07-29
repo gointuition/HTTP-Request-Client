@@ -108,31 +108,51 @@ char* handleRequest(const char *requestJSONString, int *outLen) {
     Basket *basket = buildBasket(requestJSONString);
     if (basket != NULL && basket -> error.code == NULL) {
         for (int attempt = 0; attempt < 2; ++attempt) {
-            // 2. create session
+            // 2. obtain a session (reuse or create; a new connection starts its
+            //    own reader thread that demultiplexes frames by stream id)
             handleSession(basket);
-            // createSession(basket);
             if (basket -> session == NULL) {
                 LOG("ERROR", "session creation failed");
-            } else {
-                if (basket -> error.code == NULL) {
-                    // 3. send request
-                    sendRequest(basket);
-                }
-                if (basket -> error.code == NULL) {
-                    // 4. receive response
-                    receiveResponse(basket);
+                break;
+            }
+            if (basket -> error.code != NULL) {
+                break; // session creation reported an error
+            }
 
-                    if (basket -> error.code != NULL
-                        && (strcmp(basket -> error.code, ERR_SESSION_SETTINGS_TIMEOUT.code) == 0 || strcmp(basket -> error.code, ERR_SESSION_GO_AWAY.code) == 0)
-                    ) {
-                        // 5. close session and retry
-                        cleanupTargetSession(basket);
-                        basket -> session = NULL;
-                        basket -> error = ERR_NONE;
-                        LOG("WARN", "session goes away, retry with a new session");
-                        continue;
-                    }
-                }
+            // 3. register a multiplexed stream on this connection
+            Stream *stream = registerStream(basket);
+            if (stream == NULL) {
+                break;
+            }
+
+            // 4. send HEADERS(+DATA), serialized with other streams' writes
+            sendRequest(basket);
+
+            // 5. wait for the reader thread to finish this stream, then move the
+            //    collected headers/payload into the basket (and decompress)
+            if (basket -> error.code == NULL) {
+                awaitStream(basket, stream);
+            }
+            if (basket -> error.code == NULL) {
+                finalizeStreamIntoBasket(basket, stream);
+            }
+
+            // a connection-level GOAWAY / SETTINGS_TIMEOUT is retryable once
+            const int retryable = basket -> error.code != NULL
+                && (strcmp(basket -> error.code, ERR_SESSION_SETTINGS_TIMEOUT.code) == 0
+                    || strcmp(basket -> error.code, ERR_SESSION_GO_AWAY.code) == 0);
+
+            unregisterStream(basket, stream);
+
+            if (retryable && attempt == 0) {
+                // Mark the connection unusable so no new request reuses it; the
+                // reaper closes it once its in-flight streams drain. Retry on a
+                // fresh connection.
+                basket -> session -> goingAway = 1;
+                basket -> session = NULL;
+                basket -> error = ERR_NONE;
+                LOG("WARN", "session goes away, retry with a new session");
+                continue;
             }
             break;
         }
@@ -144,17 +164,15 @@ char* handleRequest(const char *requestJSONString, int *outLen) {
 }
 
 static void sendRequest(Basket *basket) {
-    pthread_mutex_lock(&basket -> session -> lock);
-    basket -> streamId = atomic_fetch_add(&basket -> session -> streamId, 2);
-    LOG("DEBUG", "current stream id: %d", basket -> streamId);
-    pthread_mutex_unlock(&basket -> session -> lock);
-
+    // Serialize all writes on this connection so concurrent streams' HEADERS /
+    // DATA frames are never interleaved on the wire. The stream id was already
+    // assigned in registerStream (basket -> streamId).
+    pthread_mutex_lock(&basket -> session -> writeMutex);
     sendHeadersFrame(basket);
-    if (basket -> error.code == NULL) {
-        if (basket -> request.payload != NULL) {
-            sendDataFrame(basket);
-        }
+    if (basket -> error.code == NULL && basket -> request.payload != NULL) {
+        sendDataFrame(basket);
     }
+    pthread_mutex_unlock(&basket -> session -> writeMutex);
 }
 
 void getBasketContent(char *basketStr, char *dest) {

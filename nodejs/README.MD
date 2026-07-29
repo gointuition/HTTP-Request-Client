@@ -106,6 +106,32 @@ console.log(result);
 httpClient.cleanup();
 ```
 
+### Concurrent requests (async)
+
+`requestAsync` returns a Promise; the blocking native call runs on a libuv
+worker thread, so requests issued together execute in parallel. Same-host
+requests share **one** HTTP/2 connection and each takes its own stream, so they
+are multiplexed rather than serialized.
+
+```javascript
+const httpClient = require('./index.js');
+httpClient.init();
+
+const config = {
+    method: "GET",
+    url: "https://www.cloudflare.com/cdn-cgi/trace",
+    headers: { "host": "www.cloudflare.com", "user-agent": "Mozilla/5.0 ... Chrome/145.0.0.0 Safari/537.36" },
+};
+
+// 8 concurrent requests over a single multiplexed connection
+const responses = await Promise.all(
+    Array.from({ length: 8 }, () => httpClient.requestAsync(config))
+);
+responses.forEach((res) => console.log(JSON.parse(res).session.streamId)); // 1, 3, 5, 7, ...
+
+httpClient.cleanup();
+```
+
 ## API
 
 ### `httpClient.init()`
@@ -124,6 +150,19 @@ Send an HTTP/2 request.
 
 **Throws:**
 - `Error`: If request fails
+
+### `httpClient.requestAsync(config)`
+
+Send an HTTP/2 request asynchronously. The blocking native call runs on a libuv
+worker thread, so multiple pending requests execute concurrently; same-host
+requests are multiplexed over a single HTTP/2 connection (each on its own
+stream).
+
+**Parameters:**
+- `config` (Object | string): Request configuration object or JSON string
+
+**Returns:**
+- `Promise<string>`: Resolves with the response JSON string
 
 ### `httpClient.cleanup()`
 
@@ -215,6 +254,26 @@ Node.js (N-API)
 - **Direct memory access** — zero-copy buffer sharing between C and JS
 - **Automatic buffer management** — V8 garbage collection handles JS-side cleanup
 - **TLS 1.3 session resumption** — automatic `pre_shared_key` for subsequent connections to the same host
+
+## Concurrency & Multiplexing
+
+`requestAsync` makes HTTP/2 multiplexing usable from JavaScript:
+
+- **Shared connection** — concurrent same-host requests reuse one connection
+  (session creation is serialized in the C core, so a burst of requests does not
+  each open its own connection).
+- **One stream per request** — each request is assigned an odd, incrementing
+  stream id (`1, 3, 5, …`) on the shared connection.
+- **Per-connection reader thread** — a single reader thread owns `SSL_read` and
+  demultiplexes inbound frames to the waiting request by stream id, keeping the
+  shared HPACK dynamic table in wire-arrival order.
+- **Connection keep-alive** — the client acknowledges server `SETTINGS` and
+  `PING` frames, so long-lived multiplexed connections stay open.
+
+> **Note:** some servers close the connection after a single response (they send
+> `GOAWAY` with `Last-Stream-ID = 1`); against those, requests fall back to one
+> connection per request. Servers that keep the connection open (e.g. Cloudflare)
+> show the full `1, 3, 5, 7, …` stream sequence on one connection.
 
 ## Building from Source
 

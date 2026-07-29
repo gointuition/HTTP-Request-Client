@@ -38,25 +38,76 @@ httpClient.init();
 console.log('[Init] ✓ Initialized\n');
 
 async function runTests() {
-    // Test 1: Single request
-    console.log('[Test 1] Single request...');
+    // Test 1: Single request (regression for the synchronous path)
+    console.log('[Test 1] Single request (sync)...');
     try {
         const startTime = Date.now();
 
-        let requestStr = await readLinesWithoutComments("../bin/request_GET.json");
-        let result = httpClient.request(JSON.parse(requestStr));
-
-        result = httpClient.request(JSON.parse(requestStr));
+        const requestStr = await readLinesWithoutComments("../bin/request_GET.json");
+        const result = httpClient.request(JSON.parse(requestStr));
+        const parsed = JSON.parse(result);
 
         const endTime = Date.now();
-
         console.log(`✓ Completed in ${endTime - startTime}ms`);
-        console.log(`✓ URL: ${result.url || 'N/A'}`);
-
-        console.log(JSON.parse(result));
-        console.log(JSON.parse(result).response.payload);
+        console.log(`✓ URL: ${parsed.url || 'N/A'}`);
+        console.log(`✓ payload bytes: ${parsed.response && parsed.response.payload ? parsed.response.payload.length : 0}`);
+        if (parsed.error && parsed.error.code) {
+            console.log(`✗ error: ${parsed.error.code} ${parsed.error.message || ''}`);
+        }
     } catch (error) {
         console.error(`✗ Failed: ${error.message}`);
+        console.error(error.stack);
+    }
+
+    // Test 2: Concurrent requests via Promise.all (HTTP/2 multiplexing).
+    // The async path runs each blocking native call on a libuv worker thread, so
+    // these fire in parallel; same-host requests share ONE multiplexed connection
+    // and each takes its own stream (odd ids 1,3,5,...). Cloudflare keeps the
+    // connection open for many streams, so it demonstrates real multiplexing
+    // (unlike tls.peet.ws, which sends GOAWAY after a single stream).
+    const CONCURRENCY = 8;
+    console.log(`\n[Test 2] concurrent requests (async, multiplexed)...`);
+    try {
+        const concurrentStr = await readLinesWithoutComments("../tests/test_Concurrency.json");
+        const config = JSON.parse(concurrentStr);
+        const concurrency = config.concurrency || CONCURRENCY;
+        delete config.concurrency; // test-only field; strip before the native call
+
+        console.log(`  firing ${concurrency} requests to ${config.url}`);
+        const startTime = Date.now();
+        const results = await Promise.all(
+            Array.from({ length: concurrency }, (_, i) => {
+                const t0 = Date.now();
+                return httpClient.requestAsync(config).then((res) => {
+                    const parsed = JSON.parse(res);
+                    return {
+                        i,
+                        ms: Date.now() - t0,
+                        error: parsed.error && parsed.error.code ? parsed.error.code : null,
+                        bytes: parsed.response && parsed.response.payload ? parsed.response.payload.length : 0,
+                        streamId: parsed.session && parsed.session.streamId,
+                    };
+                });
+            })
+        );
+        const totalMs = Date.now() - startTime;
+
+        let ok = 0;
+        const ids = [];
+        for (const r of results) {
+            if (r.error) {
+                console.log(`  #${r.i} ✗ ${r.error} (${r.ms}ms)`);
+            } else {
+                ok++;
+                ids.push(r.streamId);
+                console.log(`  #${r.i} ✓ ${r.bytes} bytes, stream ${r.streamId} (${r.ms}ms)`);
+            }
+        }
+        const distinct = [...new Set(ids)].sort((a, b) => a - b);
+        console.log(`✓ ${ok}/${concurrency} succeeded, total wall time ${totalMs}ms`);
+        console.log(`✓ distinct stream ids on the shared connection: ${distinct.join(', ')}`);
+    } catch (error) {
+        console.error(`✗ Concurrent test failed: ${error.message}`);
         console.error(error.stack);
     }
 

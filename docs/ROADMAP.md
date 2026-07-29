@@ -1,6 +1,7 @@
 # Future Development Roadmap
 
 - [x] **More HTTP Methods** — Full support for PUT / PATCH / DELETE (enums defined, logic pending)
+- [x] **Concurrent Multiplexing** — Thread-safe shared connection with a per-connection reader thread; concurrent same-host requests are multiplexed on separate streams. Exposed to Node.js via the Promise-based `requestAsync`.
 - [ ] **Streaming Response** — Callback-based streaming for large files / long-lived connections
 - [x] **API Versioning** — Shared library soname version control
 - [ ] **CI/CD** — GitHub Actions for automated build and test

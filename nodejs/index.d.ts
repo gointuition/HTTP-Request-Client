@@ -56,6 +56,7 @@ export interface RequestResponse {
 export class HttpClient {
     init(): this;
     request(config: HttpRequestConfig | string): HttpResult;
+    requestAsync(config: HttpRequestConfig | string): Promise<string>;
     cleanup(): void;
 }
 
