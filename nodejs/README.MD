@@ -108,8 +108,10 @@ httpClient.cleanup();
 
 ### Concurrent requests (async)
 
-`requestAsync` returns a Promise; the blocking native call runs on a libuv
-worker thread, so requests issued together execute in parallel. Same-host
+`requestAsync` returns a Promise. The native call itself is **blocking**, so it
+runs on a libuv worker thread; requests issued together execute in parallel up
+to the libuv thread-pool size (default **4** — raise it via `UV_THREADPOOL_SIZE`,
+see [Concurrency & Multiplexing](#concurrency--multiplexing)). Same-host
 requests share **one** HTTP/2 connection and each takes its own stream, so they
 are multiplexed rather than serialized.
 
@@ -153,10 +155,13 @@ Send an HTTP/2 request.
 
 ### `httpClient.requestAsync(config)`
 
-Send an HTTP/2 request asynchronously. The blocking native call runs on a libuv
-worker thread, so multiple pending requests execute concurrently; same-host
-requests are multiplexed over a single HTTP/2 connection (each on its own
-stream).
+Send an HTTP/2 request asynchronously. The underlying native call is
+**blocking** (it does synchronous socket I/O in C), so `requestAsync` offloads
+it to a libuv worker thread to keep the JS event loop responsive. Multiple
+pending requests therefore run in parallel only up to the size of the libuv
+thread pool — see [Concurrency & Multiplexing](#concurrency--multiplexing) for
+how to raise it with `UV_THREADPOOL_SIZE`. Same-host requests are multiplexed
+over a single HTTP/2 connection (each on its own stream).
 
 **Parameters:**
 - `config` (Object | string): Request configuration object or JSON string
@@ -277,6 +282,38 @@ Node.js (N-API)
 > `GOAWAY` with `Last-Stream-ID = 1`); against those, requests fall back to one
 > connection per request. Servers that keep the connection open (e.g. Cloudflare)
 > show the full `1, 3, 5, 7, …` stream sequence on one connection.
+
+### Blocking calls & the libuv thread pool
+
+The native request is **synchronous/blocking** by design. `requestAsync` hides
+this by running each call on a libuv worker thread, but libuv's pool has only
+**4 threads by default**. That is the real ceiling on concurrency: issuing 8
+`requestAsync` calls with the default pool runs at most 4 at a time while the
+rest queue for a free worker.
+
+To get true N-way concurrency, raise the pool with the `UV_THREADPOOL_SIZE`
+environment variable (valid range 1–1024):
+
+```bash
+# run 8 requests genuinely in parallel
+UV_THREADPOOL_SIZE=8 node your-app.js
+```
+
+**Timing matters:** libuv creates the pool lazily on the first async operation
+and its size is fixed from that moment. Setting it from JavaScript only works if
+you do so **before any async work** (including the first `requestAsync`):
+
+```javascript
+// must be the very first line, before requiring the client or any I/O
+process.env.UV_THREADPOOL_SIZE = '8';
+const httpClient = require('./index.js');
+```
+
+Setting it as an OS-level environment variable before launching Node is the most
+reliable approach. Size the pool to your target concurrency (`UV_THREADPOOL_SIZE
+= max in-flight requests`); note the pool is shared with Node's own file-system
+and DNS operations, so leave a little headroom if the app also does heavy disk
+or `dns.lookup` work.
 
 ## Building from Source
 
