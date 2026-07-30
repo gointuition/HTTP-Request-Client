@@ -138,15 +138,21 @@ if (process.platform === 'win32') {
   // a stale/older copy left next to the addon makes it fail to load at runtime
   // with the cryptic "The specified procedure could not be found" (a newer GCC
   // emits references to newer libstdc++/libgcc exports that an older runtime
-  // lacks). So resolve them from the SAME MinGW bin as the C compiler, ALWAYS
-  // overwrite, and hard-fail if they cannot be found.
+  // lacks).
+  //
+  // Authoritative source: the runtimes CMake already staged into lib/shared next
+  // to libhttp2client.dll (see src/CMakeLists.txt) -- guaranteed to match the GCC
+  // that built the DLL, regardless of this shell's PATH. This matters because the
+  // addon is usually built from an MSVC/PowerShell environment whose PATH may
+  // resolve `where cc` to a DIFFERENT (older) MinGW. We only fall back to probing
+  // the compiler on PATH when the C library was built without the staging step.
   const mingwRuntimes = [
     'libwinpthread-1.dll',
     'libgcc_s_seh-1.dll',
     'libstdc++-6.dll'
   ]
-  // The C library is built by cc/gcc; its runtime DLLs live in the same <mingw>/bin.
-  // Prefer the compiler's location (guaranteed to match), fall back to gendef.
+  // Fallback locator: the C library is built by cc/gcc; its runtime DLLs live in
+  // the same <mingw>/bin. Prefer the compiler's location, then gendef.
   function mingwBinDir() {
     for (const tool of ['cc', 'gcc', 'gendef']) {
       const w = spawnSync('where', [tool], { stdio: 'pipe', env: process.env })
@@ -157,19 +163,17 @@ if (process.platform === 'win32') {
     }
     return null
   }
-  const mingwBin = mingwBinDir()
-  if (!mingwBin) {
-    console.error('build-addon: cannot locate the MinGW bin directory (cc/gcc/gendef ' +
-      'not on PATH). Run this from an MSYS2 MinGW64 shell so the runtime DLLs that ' +
-      'match the C library can be copied next to the addon.')
-    process.exit(1)
-  }
+  let mingwBin = null // resolved lazily only if a runtime is missing from lib/shared
   for (const rt of mingwRuntimes) {
-    const src = path.join(mingwBin, rt)
+    let src = path.join(libDir, rt) // CMake-staged, matches the DLL exactly
     if (!fs.existsSync(src)) {
-      console.error('build-addon: expected MinGW runtime ' + src + ' but it is ' +
-        'missing. Install the toolchain (pacman -S mingw-w64-x86_64-gcc) or copy a ' +
-        'matching ' + rt + ' next to ' + destDir)
+      if (mingwBin === null) mingwBin = mingwBinDir() || ''
+      src = mingwBin ? path.join(mingwBin, rt) : src
+    }
+    if (!fs.existsSync(src)) {
+      console.error('build-addon: cannot find MinGW runtime ' + rt + '. Rebuild the ' +
+        'C library (cmake --build) so it is staged into ' + libDir + ', or run this ' +
+        'from an MSYS2 MinGW64 shell so cc/gcc is on PATH.')
       process.exit(1)
     }
     // Always overwrite so a stale runtime from a previous toolchain never lingers.

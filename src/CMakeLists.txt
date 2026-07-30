@@ -71,3 +71,22 @@ target_link_libraries(${HTTP2_CLIENT} PRIVATE Threads::Threads)
 if (WIN32)
     target_link_libraries(${HTTP2_CLIENT} PRIVATE ws2_32)
 endif ()
+
+# Windows/MinGW: stage the MinGW runtime DLLs this GCC links against right next to
+# libhttp2client.dll. Downstream consumers (the Node addon, the Java binding, the
+# test executables) then copy them from lib/shared -- so the runtimes are ALWAYS
+# the exact versions that built the DLL, regardless of what a later shell's PATH
+# happens to resolve. Locating them here (from CMAKE_C_COMPILER's own bin dir) is
+# deterministic; letting build-addon.js guess via `where cc` is not, and a stale
+# copy makes the addon fail to load with "The specified procedure could not be found".
+if (WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    get_filename_component(MINGW_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
+    foreach (rt libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
+        if (EXISTS "${MINGW_BIN_DIR}/${rt}")
+            add_custom_command(TARGET ${HTTP2_CLIENT} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            "${MINGW_BIN_DIR}/${rt}" "${LIB_PATH_SHARED}/${rt}"
+                    COMMENT "Staging MinGW runtime ${rt} next to libhttp2client.dll")
+        endif ()
+    endforeach ()
+endif ()
