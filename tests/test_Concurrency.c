@@ -114,7 +114,7 @@ int main(int argc, char *argv[]) {
 
     initialiseEnv();
 
-    char *requestStr = readFromFile("./test_Concurrency.json");
+    char *requestStr = readFromFile("./request_Concurrency.json");
     if (requestStr == NULL) {
         cleanupEnv();
         return 1;

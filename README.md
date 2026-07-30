@@ -240,7 +240,20 @@ int main() {
 | `decompress` | `number` | Decompression flags: 0 (none), 1 (gzip), 2 (deflate), 4 (br), 8 (zstd), or combinations (e.g. 15 = all) |
 | `log` | `number` | Enable logging: 0 (off), 1 (on) |
 | `proxy` | `object` | Proxy: `{ scheme, host, port, authorization? }` |
-| `session` | `object` | Session: `{ expirationInMilliseconds }` |
+| `session` | `object` | Session: `{ expirationInMilliseconds, clientHelloId? }` |
+
+### `session.clientHelloId`
+
+Optional uTLS-style identifier that pins the TLS/HTTP/2 wire fingerprint to emulate. When omitted, the fingerprint follows the request's `User-Agent`, and an unrecognized `User-Agent` falls back to `hellochrome_auto`.
+
+| clientHelloId | Emulated profile |
+|---------------|------------------|
+| `hellochrome_auto` | Desktop Chrome — currently emulated version |
+| `hellochrome_150` | Desktop Chrome 150 (version-pinned) |
+| `hellocrios_auto` | Chrome on iOS (CriOS) — currently emulated version |
+| `hellocrios_150` | Chrome on iOS (CriOS) 150 (version-pinned) |
+
+`_auto` always tracks the latest emulated version, while `_<version>` pins that specific profile. Matching is case-insensitive.
 
 ## Testing
 

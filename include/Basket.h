@@ -120,6 +120,7 @@ typedef struct {
     char                scheme[16];
     char                host[256];
     char                port[8];
+    char                clientHelloId[64];
     int                 sockfd;
     int                 isActive;
     int                 expirationInMilliseconds;
@@ -156,6 +157,7 @@ typedef struct {
     int         sessionExpirationInMilliseconds;
     atomic_uint streamId;   // stream id for this request
     BrowserType browserType;
+    char        clientHelloId[64];
     Proxy       proxy;
     Request     request;
     Response    response;

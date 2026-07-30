@@ -53,6 +53,7 @@ const Error ERR_REQUEST_SENDING_HTTP2_PREFACE_FRAME_FAILED          = { "2-0012"
 const Error ERR_REQUEST_SENDING_HTTP2_SETTINGS_FRAME_FAILED         = { "2-0013", "Sending http/2 settings frame failed."};
 const Error ERR_REQUEST_SENDING_HTTP2_WINDOW_UPDATE_FRAME_FAILED    = { "2-0014", "Sending http/2 window update frame failed."};
 const Error ERR_REQUEST_UNKNOWN_PSEUDO_HEADER                       = { "2-0015", "Unknown pseudo header name."};
+const Error ERR_REQUEST_UNSUPPORTED_CLIENTHELLOID                   = { "2-0016", "Unsupported clientHelloId, e.g. hellochrome_auto / hellochrome_150 / hellocrios_auto."};
 
 // Response errors
 const Error ERR_RESPONSE_READING_CONNECTION_ERROR                   = { "3-0001", "Response reading connection error."};

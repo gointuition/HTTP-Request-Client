@@ -93,10 +93,29 @@ Basket* buildBasket(const char *requestString) {
                 basket -> error = ERR_REQUEST_PARSING_USERAGENT_FAILED;
             } else {
                 basket -> browserType = detectBrowseType(json_string_value(jsonUA));
-                // TODO
-                if (getBrowserFingerprint(basket -> browserType) == NULL) {
-                    LOG("ERROR", "unsupported user-agent: %s", json_string_value(jsonUA));
-                    basket -> error = ERR_REQUEST_UNSUPPORTED_USERAGENT;
+
+                const json_t *jsonSession = json_object_get(jsonRequest, "session");
+                const char *clientHelloId = (jsonSession != NULL)
+                    ? json_string_value(json_object_get(jsonSession, "clientHelloId"))
+                    : NULL;
+                if (clientHelloId != NULL) {
+                    const BrowserType selected = browserTypeFromClientHelloId(clientHelloId);
+                    if (selected == BROWSER_UNKNOWN) {
+                        LOG("ERROR", "unsupported clientHelloId: %s", clientHelloId);
+                        basket -> error = ERR_REQUEST_UNSUPPORTED_CLIENTHELLOID;
+                    } else {
+                        basket -> browserType = selected;
+                    }
+                } else if (getBrowserFingerprint(basket -> browserType) == NULL) {
+                    basket -> browserType = BROWSER_CHROME; // default: hellochrome_auto
+                }
+
+                if (basket -> error.code == NULL) {
+                    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+                    if (fp != NULL && fp -> clientHelloId != NULL) {
+                        strncpy(basket -> clientHelloId, fp -> clientHelloId, sizeof(basket -> clientHelloId) - 1);
+                        basket -> clientHelloId[sizeof(basket -> clientHelloId) - 1] = '\0';
+                    }
                 }
 
                 // compose headers
@@ -172,6 +191,7 @@ void initBasket(Basket * basket) {
     basket -> method = NULL;
 
     basket -> browserType = BROWSER_UNKNOWN;
+    basket -> clientHelloId[0] = '\0';
 
     basket -> request.payload = NULL;
     basket -> request.containsContentLength = 0;
@@ -439,6 +459,7 @@ char* basketToString(Basket *basket, int *outLen) {
 
     // session
     json_t *session = json_object();
+    json_object_set_new(session, "clientHelloId", json_string(basket -> clientHelloId));
     if (basket -> session != NULL) {
         json_object_set_new(session, "creationTime", json_integer(basket -> session -> creationTime));
         json_object_set_new(session, "streamId", json_integer(basket -> streamId));

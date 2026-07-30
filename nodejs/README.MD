@@ -197,6 +197,9 @@ Cleanup resources and release memory.
 | Field | Type | Description |
 |-------|------|-------------|
 | `expirationInMilliseconds` | `number` | Session expiration timeout |
+| `clientHelloId` | `string?` | uTLS-style fingerprint profile to emulate (see below) |
+
+Optional `clientHelloId` pins the TLS/HTTP/2 wire fingerprint. When omitted, it follows the request's `User-Agent`, and an unrecognized `User-Agent` falls back to `hellochrome_auto`. Supported values: `hellochrome_auto`, `hellochrome_150`, `hellocrios_auto`, `hellocrios_150` (`_auto` tracks the latest version, `_<version>` pins a specific one; case-insensitive).
 
 ## Response Structure
 
