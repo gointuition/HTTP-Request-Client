@@ -13,7 +13,7 @@
 
 static void initBasket(Basket * basket);
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders);
-static size_t processCookies(RequestHeader *headers, size_t idx, const json_t *cookie, const int calculateCookieCount, int headerValueMaxLength);
+static size_t processCookies(RequestHeader *headers, size_t idx, const char *cookie, const int calculateCookieCount, int headerValueMaxLength);
 
 Basket* buildBasket(const char *requestString) {
 //    printf("%s\n", requestString);
@@ -99,8 +99,10 @@ Basket* buildBasket(const char *requestString) {
                     basket -> error = ERR_REQUEST_UNSUPPORTED_USERAGENT;
                 }
 
-                // compose headers
-                buildHttp2Headers(basket, jsonHeaders);
+                if (basket -> error.code == NULL) {
+                    // compose headers
+                    buildHttp2Headers(basket, jsonHeaders);
+                }
             }
         }
     }
@@ -200,7 +202,12 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
     const int headerValueMaxLength = (fp != NULL) ? fp -> headerValueMaxLength : 4096;
 
-    const size_t cookieCount = processCookies(NULL, 0, json_object_get(jsonHeaders, "cookie"), 1, headerValueMaxLength);
+    size_t cookieCount = 0;
+    const json_t *jsonCookie = json_object_get(jsonHeaders, "cookie");
+    if (jsonCookie != NULL) {
+        cookieCount = processCookies(NULL, 0, json_string_value(jsonCookie), 1, headerValueMaxLength);
+    }
+
     // +1: content-length ?
     // +4: pseudo headers
     basket -> request.headers = (RequestHeader *) malloc(sizeof(RequestHeader) * (json_object_size(jsonHeaders) + 1 + 4 + cookieCount));
@@ -244,12 +251,22 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     void *iter = json_object_iter(jsonHeaders);
     while (iter) {
         const char *key = json_object_iter_key(iter);
+        const json_t *jsonValue = json_object_iter_value(iter);
+        const char *value = NULL;
+        if (json_is_string(jsonValue)) {
+            value = json_string_value(jsonValue);
+        } else if (json_is_integer(jsonValue)) {
+            char temp[32] = {0};
+            snprintf(temp, sizeof(temp), "%" JSON_INTEGER_FORMAT, json_integer_value(jsonValue));
+            value = temp;
+        } else {
+            // TODO
+        }
 
         if (containPseudoHeaders == 1) {
-            const json_t *value = json_object_iter_value(iter);
             if (value != NULL) {
                 const int isPseudo = strcasecmp(":method", key) == 0 || strcasecmp(":authority", key) == 0 || strcasecmp(":scheme", key) == 0 || strcasecmp(":path", key) == 0 ? 1 : 0;
-                basket -> request.headers[idx++] = (RequestHeader) { strdup(key), strdup(json_string_value(value)), isPseudo, 1, 1 };
+                basket -> request.headers[idx++] = (RequestHeader) { strdup(key), strdup(value), isPseudo, 1, 1 };
             }
         } else {
             if (strcasecmp(":method", key) != 0
@@ -259,22 +276,21 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
                 && strcasecmp("host", key) != 0
                 && strcasecmp("connection", key) != 0
             ) {
-                const json_t *value = json_object_iter_value(iter);
                 if (value != NULL) {
                     if (strcasecmp("cookie", key) == 0) {
                         // one header max size not more than 4KB, total headers 8KB
                         idx = processCookies(basket -> request.headers, idx, value, 0, headerValueMaxLength);
                     } else {
-                        if (strcasecmp("content-length", key) == 0) {
-                            basket -> request.containsContentLength = 1;
-                            int valueType = json_typeof(value);
-                            if (valueType != JSON_STRING) {
-                                LOG("ERROR", "incorrect value type of the header content-length");
-                                basket -> error = ERR_REQUEST_INCORRECT_CONTENTLENGTH_TYPE;
-                                break;
-                            }
-                        }
-                        basket -> request.headers[idx++] = (RequestHeader) { strdup(key), strdup(json_string_value(value)), 0, 1, 1 };
+                        // if (strcasecmp("content-length", key) == 0) {
+                        //     basket -> request.containsContentLength = 1;
+                        //     int valueType = json_typeof(value);
+                        //     if (valueType != JSON_STRING) {
+                        //         LOG("ERROR", "incorrect value type of the header content-length");
+                        //         basket -> error = ERR_REQUEST_INCORRECT_CONTENTLENGTH_TYPE;
+                        //         break;
+                        //     }
+                        // }
+                        basket -> request.headers[idx++] = (RequestHeader) { strdup(key), strdup(value), 0, 1, 1 };
                     }
                 }
             }
@@ -286,10 +302,10 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     basket -> request.numHeaders = idx;
 }
 
-static size_t processCookies(RequestHeader *headers, size_t idx, const json_t *cookie, const int calculateCookieCount, int headerValueMaxLength) {
+static size_t processCookies(RequestHeader *headers, size_t idx, const char *cookie, const int calculateCookieCount, int headerValueMaxLength) {
     if (cookie == NULL) { return 0; }
 
-    const char *fullCookie = json_string_value(cookie);
+    const char *fullCookie = cookie;
 
     const char *p = fullCookie;
     while (*p) {
