@@ -27,7 +27,8 @@
     "sec-fetch-dest": "script",
     "accept-encoding": "gzip, deflate, br, zstd",
     "accept-language": "en-US,en;q=0.9",
-    "priority": "u=1"
+    "priority": "u=1",
+    "cookie": "a=123; b=456"
   },
 //  "proxy": {
 //    "scheme": "https",

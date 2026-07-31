@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch/PR to save runner time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Third-party sources (BoringSSL, brotli, jansson, zstd, ...) are cloned by
+      # CMake at the pinned revisions declared in CMakeLists.txt. Cache them keyed
+      # on that file so bumping a pin invalidates the cache; a valid cached
+      # checkout is reused as-is by clone_third_party_pinned().
+      - name: Cache third-party sources
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: third-party-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      # The test executables always exit 0 on request errors, so assert on the
+      # logged basket JSON instead: .error must be an empty object and
+      # .response.payload must be non-empty (see .github/scripts/assert_basket.sh).
+      - name: Smoke test — GET
+        shell: bash
+        working-directory: bin
+        run: |
+          ./test_GET | tee test_GET.log
+          ../.github/scripts/assert_basket.sh test_GET.log
+
+      - name: Smoke test — POST
+        shell: bash
+        working-directory: bin
+        run: |
+          ./test_POST | tee test_POST.log
+          ../.github/scripts/assert_basket.sh test_POST.log
+
+      # Surface the built artifacts for quick inspection on failures.
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.os }}
+          path: bin/*.log
+          if-no-files-found: ignore

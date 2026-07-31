@@ -12,8 +12,17 @@
 #include "jansson.h"
 
 static void initBasket(Basket * basket);
+static const char *headerValueToString(const json_t *jsonValue, char *buffer, size_t bufferSize);
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders);
 static size_t processCookies(RequestHeader *headers, size_t idx, const char *cookie, const int calculateCookieCount, int headerValueMaxLength);
+static void parseLog(const json_t *jsonRequest);
+static void parseUrlField(Basket *basket, const json_t *jsonRequest);
+static void parseMethod(Basket *basket, const json_t *jsonRequest);
+static void parseHeaders(Basket *basket, json_t *jsonRequest);
+static void parsePayload(Basket *basket, const json_t *jsonRequest);
+static void parseOptions(Basket *basket, const json_t *jsonRequest);
+static void parseProxy(Basket *basket, const json_t *jsonRequest);
+static void parseSession(Basket *basket, const json_t *jsonRequest);
 
 Basket* buildBasket(const char *requestString) {
 //    printf("%s\n", requestString);
@@ -34,113 +43,153 @@ Basket* buildBasket(const char *requestString) {
     }
 
     if (basket -> error.code == NULL) {
-        json_t *log = json_object_get(jsonRequest, "log");
-        if (log != NULL && json_integer_value(log) == 1) {
-            setLogEnabled(true);
-        }
+        parseLog(jsonRequest);
     }
 
     // parse url
     if (basket -> error.code == NULL) {
-        // basket -> request = (Request *) malloc(sizeof(Request));
-        basket -> url = strdup(json_string_value(json_object_get(jsonRequest, "url")));
-        if (parseUrl(basket -> url, &(basket -> request.urlComponents)) != 0) {
-            LOG("ERROR", "parsing url failed: %s", basket -> url);
-            basket -> error = ERR_REQUEST_PARSING_URL_FAILED;
-        } else {
-            printUrlComponents(&(basket -> request.urlComponents));
-        }
+        parseUrlField(basket, jsonRequest);
     }
 
     // parse method
     if (basket -> error.code == NULL) {
-        const json_t *jsonMethod = json_object_get(jsonRequest, "method");
-        if (jsonMethod == NULL) {
-            LOG("ERROR", "parsing url failed: %s", basket -> url);
-            basket -> error = ERR_REQUEST_PARSING_METHOD_FAILED;
-        } else {
-            const char *method = json_string_value(jsonMethod);
-            if (strcasecmp(method, HTTP_METHOD_POST) == 0) {
-                basket -> method = HTTP_METHOD_POST;
-            } else if (strcasecmp(method, HTTP_METHOD_GET) == 0) {
-                basket -> method = HTTP_METHOD_GET;
-            } else if (strcasecmp(method, HTTP_METHOD_PUT) == 0) {
-                basket -> method = HTTP_METHOD_PUT;
-            } else if (strcasecmp(method, HTTP_METHOD_PATCH) == 0) {
-                basket -> method = HTTP_METHOD_PATCH;
-            } else if (strcasecmp(method, HTTP_METHOD_DELETE) == 0) {
-                basket -> method = HTTP_METHOD_DELETE;
-            } else {
-                LOG("ERROR", "unsupported method: %s", method);
-                basket -> error = ERR_REQUEST_UNSUPPORTED_METHOD;
-            }
-//            basket -> method = strdup(json_string_value(jsonMethod));
-//            if (strcasecmp(basket -> method, "POST") != 0 && strcasecmp(basket -> method, "GET") != 0) {
-//            }
-        }
+        parseMethod(basket, jsonRequest);
     }
 
     // parse headers
     if (basket -> error.code == NULL) {
-        json_t *jsonHeaders = json_object_get(jsonRequest, "headers");
-        if (jsonHeaders == NULL) {
-            LOG("ERROR", "missing request headers");
-            basket -> error = ERR_REQUEST_MISSING_HEADERS;
-        } else {
-            const json_t *jsonUA = json_object_get(jsonHeaders, "user-agent");
-            if (jsonUA == NULL) {
-                LOG("ERROR", "missing header user-agent");
-                basket -> error = ERR_REQUEST_PARSING_USERAGENT_FAILED;
-            } else {
-                basket -> browserType = detectBrowseType(json_string_value(jsonUA));
-
-                const json_t *jsonSession = json_object_get(jsonRequest, "session");
-                const char *clientHelloId = (jsonSession != NULL)
-                    ? json_string_value(json_object_get(jsonSession, "clientHelloId"))
-                    : NULL;
-                if (clientHelloId != NULL) {
-                    const BrowserType selected = browserTypeFromClientHelloId(clientHelloId);
-                    if (selected == BROWSER_UNKNOWN) {
-                        LOG("ERROR", "unsupported clientHelloId: %s", clientHelloId);
-                        basket -> error = ERR_REQUEST_UNSUPPORTED_CLIENTHELLOID;
-                    } else {
-                        basket -> browserType = selected;
-                    }
-                } else if (getBrowserFingerprint(basket -> browserType) == NULL) {
-                    basket -> browserType = BROWSER_CHROME; // default: hellochrome_auto
-                }
-
-                if (basket -> error.code == NULL) {
-                    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
-                    if (fp != NULL && fp -> clientHelloId != NULL) {
-                        strncpy(basket -> clientHelloId, fp -> clientHelloId, sizeof(basket -> clientHelloId) - 1);
-                        basket -> clientHelloId[sizeof(basket -> clientHelloId) - 1] = '\0';
-                    }
-                }
-
-                if (basket -> error.code == NULL) {
-                    // compose headers
-                    buildHttp2Headers(basket, jsonHeaders);
-                }
-            }
-        }
+        parseHeaders(basket, jsonRequest);
     }
 
     // parse payload
     if (basket -> error.code == NULL) {
-        const json_t *jsonPayload = json_object_get(jsonRequest, "payload");
-        if (jsonPayload != NULL) {
-            // TODO JSON_INDENT, JSON_ENSURE_ASCII, JSON_SORT_KEYS, JSON_PRESERVE_ORDER, JSON_ENCODE_ANY
-            basket -> request.payload = json_dumps(jsonPayload, JSON_COMPACT);
-            if (basket -> request.containsContentLength != 1) {
-                LOG("ERROR", "missing header content-length");
-                basket -> error = ERR_REQUEST_PARSING_CONTENTLENGTH_FAILED;
-            }
+        parsePayload(basket, jsonRequest);
+    }
+
+    parseOptions(basket, jsonRequest);
+
+    if (basket -> error.code == NULL) {
+        parseProxy(basket, jsonRequest);
+    }
+
+    if (basket -> error.code == NULL) {
+        parseSession(basket, jsonRequest);
+    }
+
+    if (jsonRequest != NULL) {
+        json_decref(jsonRequest);
+    }
+
+    return basket;
+}
+
+static void parseLog(const json_t *jsonRequest) {
+    json_t *log = json_object_get(jsonRequest, "log");
+    if (log != NULL && json_integer_value(log) == 1) {
+        setLogEnabled(true);
+    }
+}
+
+static void parseUrlField(Basket *basket, const json_t *jsonRequest) {
+    // basket -> request = (Request *) malloc(sizeof(Request));
+    basket -> url = strdup(json_string_value(json_object_get(jsonRequest, "url")));
+    if (parseUrl(basket -> url, &(basket -> request.urlComponents)) != 0) {
+        LOG("ERROR", "parsing url failed: %s", basket -> url);
+        basket -> error = ERR_REQUEST_PARSING_URL_FAILED;
+    } else {
+        printUrlComponents(&(basket -> request.urlComponents));
+    }
+}
+
+static void parseMethod(Basket *basket, const json_t *jsonRequest) {
+    const json_t *jsonMethod = json_object_get(jsonRequest, "method");
+    if (jsonMethod == NULL) {
+        LOG("ERROR", "parsing url failed: %s", basket -> url);
+        basket -> error = ERR_REQUEST_PARSING_METHOD_FAILED;
+    } else {
+        const char *method = json_string_value(jsonMethod);
+        if (strcasecmp(method, HTTP_METHOD_POST) == 0) {
+            basket -> method = HTTP_METHOD_POST;
+        } else if (strcasecmp(method, HTTP_METHOD_GET) == 0) {
+            basket -> method = HTTP_METHOD_GET;
+        } else if (strcasecmp(method, HTTP_METHOD_PUT) == 0) {
+            basket -> method = HTTP_METHOD_PUT;
+        } else if (strcasecmp(method, HTTP_METHOD_PATCH) == 0) {
+            basket -> method = HTTP_METHOD_PATCH;
+        } else if (strcasecmp(method, HTTP_METHOD_DELETE) == 0) {
+            basket -> method = HTTP_METHOD_DELETE;
         } else {
-            basket -> request.payload = NULL;
+            LOG("ERROR", "unsupported method: %s", method);
+            basket -> error = ERR_REQUEST_UNSUPPORTED_METHOD;
+        }
+//        basket -> method = strdup(json_string_value(jsonMethod));
+//        if (strcasecmp(basket -> method, "POST") != 0 && strcasecmp(basket -> method, "GET") != 0) {
+//        }
+    }
+}
+
+static void parseHeaders(Basket *basket, json_t *jsonRequest) {
+    json_t *jsonHeaders = json_object_get(jsonRequest, "headers");
+    if (jsonHeaders == NULL) {
+        LOG("ERROR", "missing request headers");
+        basket -> error = ERR_REQUEST_MISSING_HEADERS;
+        return;
+    }
+
+    const json_t *jsonUA = json_object_get(jsonHeaders, "user-agent");
+    if (jsonUA == NULL) {
+        LOG("ERROR", "missing header user-agent");
+        basket -> error = ERR_REQUEST_PARSING_USERAGENT_FAILED;
+        return;
+    }
+
+    basket -> browserType = detectBrowseType(json_string_value(jsonUA));
+
+    const json_t *jsonSession = json_object_get(jsonRequest, "session");
+    const char *clientHelloId = (jsonSession != NULL)
+        ? json_string_value(json_object_get(jsonSession, "clientHelloId"))
+        : NULL;
+    if (clientHelloId != NULL) {
+        const BrowserType selected = browserTypeFromClientHelloId(clientHelloId);
+        if (selected == BROWSER_UNKNOWN) {
+            LOG("ERROR", "unsupported clientHelloId: %s", clientHelloId);
+            basket -> error = ERR_REQUEST_UNSUPPORTED_CLIENTHELLOID;
+        } else {
+            basket -> browserType = selected;
+        }
+    } else if (getBrowserFingerprint(basket -> browserType) == NULL) {
+        basket -> browserType = BROWSER_CHROME; // default: hellochrome_auto
+    }
+
+    if (basket -> error.code == NULL) {
+        const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+        if (fp != NULL && fp -> clientHelloId != NULL) {
+            strncpy(basket -> clientHelloId, fp -> clientHelloId, sizeof(basket -> clientHelloId) - 1);
+            basket -> clientHelloId[sizeof(basket -> clientHelloId) - 1] = '\0';
         }
     }
 
+    if (basket -> error.code == NULL) {
+        // compose headers
+        buildHttp2Headers(basket, jsonHeaders);
+    }
+}
+
+static void parsePayload(Basket *basket, const json_t *jsonRequest) {
+    const json_t *jsonPayload = json_object_get(jsonRequest, "payload");
+    if (jsonPayload != NULL) {
+        // TODO JSON_INDENT, JSON_ENSURE_ASCII, JSON_SORT_KEYS, JSON_PRESERVE_ORDER, JSON_ENCODE_ANY
+        basket -> request.payload = json_dumps(jsonPayload, JSON_COMPACT);
+        if (basket -> request.containsContentLength != 1) {
+            LOG("ERROR", "missing header content-length");
+            basket -> error = ERR_REQUEST_PARSING_CONTENTLENGTH_FAILED;
+        }
+    } else {
+        basket -> request.payload = NULL;
+    }
+}
+
+static void parseOptions(Basket *basket, const json_t *jsonRequest) {
     const json_t *connectTimeoutInMilliseconds = json_object_get(jsonRequest, "connectTimeoutInMilliseconds");
     if (connectTimeoutInMilliseconds != NULL) {
         basket -> connectTimeoutInMilliseconds = json_integer_value(connectTimeoutInMilliseconds);
@@ -153,39 +202,33 @@ Basket* buildBasket(const char *requestString) {
     if (decompress != NULL) {
         basket -> decompress = json_integer_value(decompress);
     }
+}
 
-    if (basket -> error.code == NULL) {
-        json_t *jsonProxy = json_object_get(jsonRequest, "proxy");
-        if (jsonProxy != NULL) {
-            strncpy(basket -> proxy.scheme, json_string_value(json_object_get(jsonProxy, "scheme")), sizeof(basket -> proxy.scheme) - 1);
-            basket -> proxy.scheme[sizeof(basket -> proxy.scheme) - 1] = '\0';
-            strncpy(basket -> proxy.host, json_string_value(json_object_get(jsonProxy, "host")), sizeof(basket -> proxy.host) - 1);
-            basket -> proxy.host[sizeof(basket -> proxy.host) - 1] = '\0';
-            strncpy(basket -> proxy.port, json_string_value(json_object_get(jsonProxy, "port")), sizeof(basket -> proxy.port) - 1);
-            basket -> proxy.port[sizeof(basket -> proxy.port) - 1] = '\0';
-            const json_t *authorization = json_object_get(jsonProxy, "authorization");
-            if (authorization != NULL) {
-                strncpy(basket -> proxy.authorization, json_string_value(json_object_get(jsonProxy, "authorization")), sizeof(basket -> proxy.authorization) - 1);
-                basket -> proxy.authorization[sizeof(basket -> proxy.authorization) - 1] = '\0';
-            }
+static void parseProxy(Basket *basket, const json_t *jsonRequest) {
+    json_t *jsonProxy = json_object_get(jsonRequest, "proxy");
+    if (jsonProxy != NULL) {
+        strncpy(basket -> proxy.scheme, json_string_value(json_object_get(jsonProxy, "scheme")), sizeof(basket -> proxy.scheme) - 1);
+        basket -> proxy.scheme[sizeof(basket -> proxy.scheme) - 1] = '\0';
+        strncpy(basket -> proxy.host, json_string_value(json_object_get(jsonProxy, "host")), sizeof(basket -> proxy.host) - 1);
+        basket -> proxy.host[sizeof(basket -> proxy.host) - 1] = '\0';
+        strncpy(basket -> proxy.port, json_string_value(json_object_get(jsonProxy, "port")), sizeof(basket -> proxy.port) - 1);
+        basket -> proxy.port[sizeof(basket -> proxy.port) - 1] = '\0';
+        const json_t *authorization = json_object_get(jsonProxy, "authorization");
+        if (authorization != NULL) {
+            strncpy(basket -> proxy.authorization, json_string_value(json_object_get(jsonProxy, "authorization")), sizeof(basket -> proxy.authorization) - 1);
+            basket -> proxy.authorization[sizeof(basket -> proxy.authorization) - 1] = '\0';
         }
     }
+}
 
-    if (basket -> error.code == NULL) {
-        json_t *jsonSession = json_object_get(jsonRequest, "session");
-        if (jsonSession != NULL) {
-            const json_t *expirationInMilliseconds = json_object_get(jsonSession, "expirationInMilliseconds");
-            if (expirationInMilliseconds != NULL) {
-                basket -> sessionExpirationInMilliseconds = json_integer_value(expirationInMilliseconds);
-            }
+static void parseSession(Basket *basket, const json_t *jsonRequest) {
+    json_t *jsonSession = json_object_get(jsonRequest, "session");
+    if (jsonSession != NULL) {
+        const json_t *expirationInMilliseconds = json_object_get(jsonSession, "expirationInMilliseconds");
+        if (expirationInMilliseconds != NULL) {
+            basket -> sessionExpirationInMilliseconds = json_integer_value(expirationInMilliseconds);
         }
     }
-
-    if (jsonRequest != NULL) {
-        json_decref(jsonRequest);
-    }
-
-    return basket;
 }
 
 void initBasket(Basket * basket) {
@@ -271,20 +314,20 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     void *iter = json_object_iter(jsonHeaders);
     while (iter) {
         const char *key = json_object_iter_key(iter);
+        if (strcasecmp("content-length", key) == 0) {
+            basket->request.containsContentLength = 1;
+        }
+
         const json_t *jsonValue = json_object_iter_value(iter);
-        const char *value = NULL;
-        if (json_is_string(jsonValue)) {
-            value = json_string_value(jsonValue);
-        } else if (json_is_integer(jsonValue)) {
-            char temp[32] = {0};
-            snprintf(temp, sizeof(temp), "%" JSON_INTEGER_FORMAT, json_integer_value(jsonValue));
-            value = temp;
-        } else {
-            // TODO
+        char scalarBuffer[64] = {0};
+        const char *value = headerValueToString(jsonValue, scalarBuffer, sizeof(scalarBuffer));
+        if (value == NULL) {
+            LOG("WARN", "skipping header %s: unsupported value type", key);
         }
 
         if (containPseudoHeaders == 1) {
             if (value != NULL) {
+                // TODO cookie
                 const int isPseudo = strcasecmp(":method", key) == 0 || strcasecmp(":authority", key) == 0 || strcasecmp(":scheme", key) == 0 || strcasecmp(":path", key) == 0 ? 1 : 0;
                 basket -> request.headers[idx++] = (RequestHeader) { strdup(key), strdup(value), isPseudo, 1, 1 };
             }
@@ -301,15 +344,6 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
                         // one header max size not more than 4KB, total headers 8KB
                         idx = processCookies(basket -> request.headers, idx, value, 0, headerValueMaxLength);
                     } else {
-                        // if (strcasecmp("content-length", key) == 0) {
-                        //     basket -> request.containsContentLength = 1;
-                        //     int valueType = json_typeof(value);
-                        //     if (valueType != JSON_STRING) {
-                        //         LOG("ERROR", "incorrect value type of the header content-length");
-                        //         basket -> error = ERR_REQUEST_INCORRECT_CONTENTLENGTH_TYPE;
-                        //         break;
-                        //     }
-                        // }
                         basket -> request.headers[idx++] = (RequestHeader) { strdup(key), strdup(value), 0, 1, 1 };
                     }
                 }
@@ -320,6 +354,31 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     }
 
     basket -> request.numHeaders = idx;
+}
+
+// Convert a scalar JSON value (string, integer, real, boolean) to its string
+// representation. Non-string scalars are rendered into the caller-provided
+// buffer; strings are returned as-is. Returns NULL for null/array/object.
+static const char *headerValueToString(const json_t *jsonValue, char *buffer, size_t bufferSize) {
+    if (json_is_string(jsonValue)) {
+        return json_string_value(jsonValue);
+    }
+    if (json_is_integer(jsonValue)) {
+        snprintf(buffer, bufferSize, "%" JSON_INTEGER_FORMAT, json_integer_value(jsonValue));
+        return buffer;
+    }
+    if (json_is_real(jsonValue)) {
+        // reuse jansson's encoder to keep the shortest round-trip form (e.g. 27.1)
+        char *encoded = json_dumps(jsonValue, JSON_ENCODE_ANY | JSON_COMPACT);
+        if (encoded == NULL) { return NULL; }
+        snprintf(buffer, bufferSize, "%s", encoded);
+        free(encoded);
+        return buffer;
+    }
+    if (json_is_boolean(jsonValue)) {
+        return json_is_true(jsonValue) ? "true" : "false";
+    }
+    return NULL;
 }
 
 static size_t processCookies(RequestHeader *headers, size_t idx, const char *cookie, const int calculateCookieCount, int headerValueMaxLength) {
