@@ -3,6 +3,7 @@
 //
 
 #include <string.h>
+#include <strings.h>
 
 #include "BrowserHandler.h"
 
@@ -90,6 +91,7 @@ static const PseudoHeaderType CHROME_PSEUDO_ORDER[] = {
 };
 
 static const BrowserFingerprint CHROME_FINGERPRINT_150 = {
+    .clientHelloId = "hellochrome_150",
     .settingsFrame = CHROME_SETTINGS_FRAME,
     .settingsFrameLen = sizeof(CHROME_SETTINGS_FRAME),
     .windowUpdateFrame = CHROME_WINDOW_UPDATE_FRAME,
@@ -211,6 +213,7 @@ static const PseudoHeaderType CRIOS_PSEUDO_ORDER[] = {
 };
 
 static const BrowserFingerprint CRIOS_FINGERPRINT_150 = {
+    .clientHelloId = "hellocrios_150",
     .settingsFrame = CRIOS_SETTINGS_FRAME,
     .settingsFrameLen = sizeof(CRIOS_SETTINGS_FRAME),
     .windowUpdateFrame = CRIOS_WINDOW_UPDATE_FRAME,
@@ -244,8 +247,42 @@ const BrowserFingerprint* getBrowserFingerprint(BrowserType type) {
     switch (type) {
         case BROWSER_CHROME:     return &CHROME_FINGERPRINT;
         case BROWSER_CHROME_IOS: return &CRIOS_FINGERPRINT;
-        default:                 return NULL;
+        default:                 return &CHROME_FINGERPRINT;
     }
+}
+
+const BrowserFingerprint* getBrowserFingerprintById(const char *clientHelloId) {
+    if (clientHelloId == NULL || clientHelloId[0] == '\0') {
+        return NULL;
+    }
+    // "_auto" pins the currently emulated version of a browser (the alias);
+    // an explicit "_<version>" id pins that specific profile.
+    if (strcasecmp(clientHelloId, "hellochrome_auto") == 0) {
+        return &CHROME_FINGERPRINT;
+    }
+    if (strcasecmp(clientHelloId, CHROME_FINGERPRINT_150.clientHelloId) == 0) {
+        return &CHROME_FINGERPRINT_150;
+    }
+    if (strcasecmp(clientHelloId, "hellocrios_auto") == 0) {
+        return &CRIOS_FINGERPRINT;
+    }
+    if (strcasecmp(clientHelloId, CRIOS_FINGERPRINT_150.clientHelloId) == 0) {
+        return &CRIOS_FINGERPRINT_150;
+    }
+    return NULL;
+}
+
+BrowserType browserTypeFromClientHelloId(const char *clientHelloId) {
+    if (getBrowserFingerprintById(clientHelloId) == NULL) {
+        return BROWSER_UNKNOWN;
+    }
+    if (strncasecmp(clientHelloId, "hellochrome", 11) == 0) {
+        return BROWSER_CHROME;
+    }
+    if (strncasecmp(clientHelloId, "hellocrios", 10) == 0) {
+        return BROWSER_CHROME_IOS;
+    }
+    return BROWSER_UNKNOWN;
 }
 
 int isChromeUA(const char *ua) {

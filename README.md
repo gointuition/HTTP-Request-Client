@@ -156,8 +156,11 @@ The browser-specific values these patches consume (cipher list, signature algori
 void initialiseEnv(void);
 
 // 2. Send request (two-step, thread-safe)
-//    handleRequest may be called concurrently from multiple threads; same-host
-//    requests share one HTTP/2 connection and are multiplexed on separate streams.
+//    handleRequest is a BLOCKING/synchronous call: it does not return until the
+//    response arrives, the timeout elapses, or an error occurs. Concurrency is
+//    achieved by calling it from multiple threads -- it may be called
+//    concurrently, and same-host requests share one HTTP/2 connection and are
+//    multiplexed on separate streams.
 //    Step 1: get result pointer and length
 //    requestJSONString: JSON config (see format below)
 //    outLen: output parameter for response JSON length
@@ -172,6 +175,16 @@ void getBasketContent(char *basketStr, char *dest);
 // 3. Cleanup (call once at shutdown)
 void cleanupEnv(void);
 ```
+
+> **Blocking by design.** `handleRequest` is synchronous — the calling thread
+> blocks until the response is fully read, the timeout fires, or an error is
+> returned. There is no async/callback variant in the C core. To issue requests
+> concurrently, call `handleRequest` from multiple threads (it is thread-safe);
+> same-host requests are then multiplexed over a single shared HTTP/2 connection.
+> The language bindings build their concurrency on top of this: e.g. the Node.js
+> binding runs each blocking call on a libuv worker thread (raise
+> `UV_THREADPOOL_SIZE` for high concurrency — see [nodejs/README.MD](nodejs/README.MD)),
+> and Python/Java use their own thread pools.
 
 ### Example
 
@@ -240,7 +253,20 @@ int main() {
 | `decompress` | `number` | Decompression flags: 0 (none), 1 (gzip), 2 (deflate), 4 (br), 8 (zstd), or combinations (e.g. 15 = all) |
 | `log` | `number` | Enable logging: 0 (off), 1 (on) |
 | `proxy` | `object` | Proxy: `{ scheme, host, port, authorization? }` |
-| `session` | `object` | Session: `{ expirationInMilliseconds }` |
+| `session` | `object` | Session: `{ expirationInMilliseconds, clientHelloId? }` |
+
+### `session.clientHelloId`
+
+Optional uTLS-style identifier that pins the TLS/HTTP/2 wire fingerprint to emulate. When omitted, the fingerprint follows the request's `User-Agent`, and an unrecognized `User-Agent` falls back to `hellochrome_auto`.
+
+| clientHelloId | Emulated profile |
+|---------------|------------------|
+| `hellochrome_auto` | Desktop Chrome — currently emulated version |
+| `hellochrome_150` | Desktop Chrome 150 (version-pinned) |
+| `hellocrios_auto` | Chrome on iOS (CriOS) — currently emulated version |
+| `hellocrios_150` | Chrome on iOS (CriOS) 150 (version-pinned) |
+
+`_auto` always tracks the latest emulated version, while `_<version>` pins that specific profile. Matching is case-insensitive.
 
 ## Testing
 

@@ -33,6 +33,8 @@ typedef enum {
 // A browser's complete wire fingerprint, gathered into a single profile:
 // the HTTP/2 SETTINGS/WINDOW_UPDATE frames plus the TLS ClientHello shape.
 typedef struct {
+    const char *clientHelloId;
+
     // HTTP/2 fingerprint
     const unsigned char *settingsFrame;
     size_t settingsFrameLen;
@@ -64,5 +66,9 @@ BrowserType detectBrowseType(const char *ua);
 
 // Returns the fingerprint profile for a browser type, or NULL if unsupported.
 const BrowserFingerprint* getBrowserFingerprint(BrowserType type);
+
+const BrowserFingerprint* getBrowserFingerprintById(const char *clientHelloId);
+
+BrowserType browserTypeFromClientHelloId(const char *clientHelloId);
 
 #endif //BROWSER_H

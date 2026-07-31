@@ -75,7 +75,7 @@ async function runTests() {
     const CONCURRENCY = 8;
     console.log(`\n[Test 2] concurrent requests (async, multiplexed)...`);
     try {
-        const concurrentStr = await readLinesWithoutComments("../tests/test_Concurrency.json");
+        const concurrentStr = await readLinesWithoutComments("../bin/request_Concurrency.json");
         const config = JSON.parse(concurrentStr);
         const concurrency = config.concurrency || CONCURRENCY;
         delete config.concurrency; // test-only field; strip before the native call

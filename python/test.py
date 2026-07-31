@@ -99,7 +99,7 @@ def main():
     DEFAULT_CONCURRENCY = 8
     try:
         config = read_json_without_comments(
-            os.path.join(project_root, "tests", "test_Concurrency.json")
+            os.path.join(project_root, "bin", "request_Concurrency.json")
         )
         # "concurrency" is a test-only field; pop it before the native call. The
         # remaining keys keep their insertion order (Python dict + json round-trip

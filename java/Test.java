@@ -127,7 +127,7 @@ public class Test {
             // header order, which is part of this client's browser fingerprint. Parse a
             // throwaway copy only to read the test-only "concurrency" field; the native
             // client ignores that unknown field (mirrors test_Concurrency.c).
-            final String requestJson = readJsonWithoutComments(projectRoot + "/tests/test_Concurrency.json");
+            final String requestJson = readJsonWithoutComments(projectRoot + "/bin/request_Concurrency.json");
             JSONObject config = new JSONObject(requestJson);
             int concurrency = config.optInt("concurrency", DEFAULT_CONCURRENCY);
             if (concurrency < 1) {

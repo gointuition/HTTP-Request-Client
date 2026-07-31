@@ -8,6 +8,8 @@ export interface HttpRequestConfig {
     headers?: Record<string, string>;
     session?: {
         expirationInMilliseconds?: number;
+        // uTLS fingerprint profile: hellochrome_auto | hellochrome_150 | hellocrios_auto | hellocrios_150
+        clientHelloId?: string;
     };
     proxy?: {
         scheme: string;
@@ -44,6 +46,7 @@ export interface HttpResult {
         creationTime?: number;
         streamId?: number;
         expirationInMilliseconds?: number;
+        clientHelloId?: string;
     };
 }
 

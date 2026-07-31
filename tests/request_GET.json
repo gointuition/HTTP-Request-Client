@@ -36,6 +36,9 @@
 //    "authorization": "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
 //  },
   "session": {
+    // "hellochrome_150", "hellocrios_auto", ...
+    "clientHelloId": "hellochrome_auto",
+//    "clientHelloId": "hellochrome_150",
     "expirationInMilliseconds": 300000
   }
 }

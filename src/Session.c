@@ -505,6 +505,10 @@ static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * 
     strncpy(session -> port, basket -> request.urlComponents.port, sizeof(session -> port) - 1);
     session -> port[sizeof(session -> port) - 1] = '\0';
 
+    // Record the fingerprint profile this connection was established with.
+    strncpy(session -> clientHelloId, basket -> clientHelloId, sizeof(session -> clientHelloId) - 1);
+    session -> clientHelloId[sizeof(session -> clientHelloId) - 1] = '\0';
+
     session -> sockfd = sockfd;
     session -> sslCtx = sslCtx;
     session -> ssl = ssl;
