@@ -255,10 +255,12 @@ jobs:
         shell: msys2 {0}
         run: |
           set -o pipefail
-          # setup-java sets JAVA_HOME as a Windows path; explicitly convert
-          # and add to the MSYS2 PATH.
+          # setup-java sets JAVA_HOME as a Windows path; convert to Unix
+          # form so it works inside MSYS2 regardless of path-conversion
+          # settings.
           if [ -n "$JAVA_HOME" ]; then
-            export PATH="$(cygpath -u "$JAVA_HOME")/bin:$PATH"
+            export JAVA_HOME="$(cygpath -u "$JAVA_HOME")"
+            export PATH="$JAVA_HOME/bin:$PATH"
           fi
           java -version
           # Maven: MSYS2 does not inherit GITHUB_PATH; download the binary
@@ -268,9 +270,10 @@ jobs:
           unzip -qo "apache-maven-${MAVEN_VERSION}-bin.zip" -d /tmp
           export PATH="/tmp/apache-maven-${MAVEN_VERSION}/bin:$PATH"
           mvn --version
-          # Prevent MSYS2 from mangling Maven -D arguments; required in
-          # MINGW64 shell per java/README.md.
-          export MSYS2_ARG_CONV_EXCL="*"
+          # NOTE: MSYS2_ARG_CONV_EXCL is set inside build.sh right before
+          # the mvn clean package call (per java/README.md).  Do NOT set it
+          # here — it would also disable conversion for Maven's own shell
+          # launcher and break classpath resolution.
           cd "${{ github.workspace }}/java"
           bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
           echo "---"
