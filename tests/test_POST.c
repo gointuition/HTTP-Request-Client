@@ -5,20 +5,46 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "jansson.h"
+
 #include "File.h"
 #include "Http2Client.h"
 #include "Log.h"
 
 static int validateBasket(const char *basketStr) {
-    if (strstr(basketStr, "\"error\":{}") == NULL) {
-        LOG("ERROR", "basket error is not empty");
+    json_error_t jerr;
+    json_t *root = json_loads(basketStr, 0, &jerr);
+    if (root == NULL) {
+        LOG("ERROR", "basket is not valid JSON: %s (line %d)", jerr.text, jerr.line);
         return 0;
     }
-    if (strstr(basketStr, "\"payload\":\"\"") != NULL
-        || strstr(basketStr, "\"response\":") == NULL) {
+
+    // error field must be an empty object
+    json_t *err = json_object_get(root, "error");
+    char *errStr = json_dumps(err, JSON_COMPACT);
+    if (errStr == NULL || strcmp(errStr, "{}") != 0) {
+        LOG("ERROR", "basket error is not empty: %s", errStr ? errStr : "(null)");
+        free(errStr);
+        json_decref(root);
+        return 0;
+    }
+    free(errStr);
+
+    // response.payload must be a non-empty string
+    json_t *response = json_object_get(root, "response");
+    if (response == NULL) {
+        LOG("ERROR", "basket has no response field");
+        json_decref(root);
+        return 0;
+    }
+    json_t *payload = json_object_get(response, "payload");
+    if (payload == NULL || !json_is_string(payload) || json_string_length(payload) == 0) {
         LOG("ERROR", "response.payload is empty or missing");
+        json_decref(root);
         return 0;
     }
+
+    json_decref(root);
     return 1;
 }
 
