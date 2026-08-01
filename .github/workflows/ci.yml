@@ -295,16 +295,14 @@ jobs:
       # needed to generate the import library.  Run from pwsh so that
       # node-gyp can find VS natively; add the MSYS2 MINGW64 bin directory
       # to PATH for gendef.
-      # msvc-dev-cmd sets VCINSTALLDIR & friends so node-gyp skips version
-      # probing — works with VS 2022, VS 2026, and any future version.
+      # npm_config_msvs_version=2022 forces node-gyp to use VS 2022 via
+      # vswhere, skipping VS 2026 (v18) which node-gyp does not recognise.
       # See nodejs/README.MD.
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64
-
       - name: Node.js — build and run test.js (Windows)
         id: node_test_win
         shell: pwsh
+        env:
+          npm_config_msvs_version: 2022
         run: |
           $ErrorActionPreference = "Stop"
           # Add MSYS2 MINGW64 bin to PATH (for build-addon.js → gendef).
