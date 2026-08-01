@@ -4,7 +4,7 @@
 - [x] **Concurrent Multiplexing** — Thread-safe shared connection with a per-connection reader thread; concurrent same-host requests are multiplexed on separate streams. Exposed to Node.js via the Promise-based `requestAsync`.
 - [ ] **Streaming Response** — Callback-based streaming for large files / long-lived connections
 - [x] **API Versioning** — Shared library soname version control
-- [ ] **CI/CD** — GitHub Actions for automated build and test
+- [x] **CI/CD** — GitHub Actions for automated build and test
 - [ ] **HTTP/1.1** — Protocol downgrade / fallback compatibility support
 - [ ] **Other Browser Fingerprints** — TLS/HTTP2 fingerprint profiles for Firefox, Safari, Edge (enums defined, fingerprint data pending)
 - [ ] **Other Platforms** — Support for Windows / macOS / iOS / Android (enums defined, logic pending)
