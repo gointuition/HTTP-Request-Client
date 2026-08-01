@@ -239,15 +239,11 @@ jobs:
           path: python_test.log
           if-no-files-found: ignore
 
-      # Maven: use the community setup-maven action (adds mvn to the
-      # Windows PATH, which MSYS2 inherits).
-      - uses: stCarolas/setup-maven@v5
-        with:
-          maven-version: 3.9.9
-
       # Java: build.sh already handles MSYS2 (resolves JAVA_HOME, requires
-      # gcc).  setup-java provides a JDK.  The JNI bridge is compiled with
-      # gcc (-Djni.compiler=gcc) to match the MinGW-built libhttp2client.dll.
+      # gcc).  setup-java provides a JDK.  Maven is downloaded inside the
+      # MSYS2 step (its GITHUB_PATH entry isn't inherited by MSYS2 shell).
+      # The JNI bridge is compiled with gcc (-Djni.compiler=gcc) to match
+      # the MinGW-built libhttp2client.dll.
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -259,14 +255,19 @@ jobs:
         shell: msys2 {0}
         run: |
           set -o pipefail
-          # setup-java sets JAVA_HOME as a Windows path.  MSYS2 does not
-          # automatically add GITHUB_PATH entries to its own PATH, so we
-          # explicitly convert and export here.
+          # setup-java sets JAVA_HOME as a Windows path; explicitly convert
+          # and add to the MSYS2 PATH.
           if [ -n "$JAVA_HOME" ]; then
-            JAVA_BIN="$(cygpath -u "$JAVA_HOME")/bin"
-            export PATH="$JAVA_BIN:$PATH"
+            export PATH="$(cygpath -u "$JAVA_HOME")/bin:$PATH"
           fi
           java -version
+          # Maven: MSYS2 does not inherit GITHUB_PATH; download the binary
+          # inside the MSYS2 context so mvn is on PATH.
+          MAVEN_VERSION=3.9.9
+          curl -fsSLO "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.zip"
+          unzip -qo "apache-maven-${MAVEN_VERSION}-bin.zip" -d /tmp
+          export PATH="/tmp/apache-maven-${MAVEN_VERSION}/bin:$PATH"
+          mvn --version
           cd "${{ github.workspace }}/java"
           bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
           echo "---"
