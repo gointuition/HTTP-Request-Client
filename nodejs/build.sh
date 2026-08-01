@@ -16,6 +16,8 @@ echo "Node.js addon directory: $SCRIPT_DIR"
 LIB_NAME="libhttp2client.dylib"
 if [ "$(uname)" = "Linux" ]; then
     LIB_NAME="libhttp2client.so"
+elif [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
+    LIB_NAME="libhttp2client.dll"
 fi
 
 if [ ! -f "$PROJECT_ROOT/lib/shared/$LIB_NAME" ]; then

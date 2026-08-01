@@ -113,10 +113,18 @@ fi
 VERSION="1.0.0"
 JAR_NAME="http2-client-${VERSION}.jar"
 
+# On Windows (MSYS2), override the Maven windows profile's default MSVC
+# compiler with gcc so the JNI bridge links against the MinGW-built
+# libhttp2client.dll without needing an import library.
+JNI_COMPILER_FLAG=""
+if [[ "$OS_NAME" == MINGW* || "$OS_NAME" == MSYS* ]]; then
+    JNI_COMPILER_FLAG="-Djni.compiler=gcc"
+fi
+
 # ── Build everything through Maven ────────────────────────────────────
 echo ""
-echo "Running: mvn -f \"$SCRIPT_DIR/pom.xml\" clean package"
-mvn -f "$SCRIPT_DIR/pom.xml" clean package
+echo "Running: mvn -f \"$SCRIPT_DIR/pom.xml\" clean package $JNI_COMPILER_FLAG"
+mvn -f "$SCRIPT_DIR/pom.xml" clean package $JNI_COMPILER_FLAG
 
 echo ""
 echo "Fat JAR created: build/$JAR_NAME"

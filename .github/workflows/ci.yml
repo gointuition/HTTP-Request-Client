@@ -176,6 +176,9 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-nodejs
+            mingw-w64-x86_64-maven
             git
 
       - name: Cache third-party sources
@@ -202,10 +205,92 @@ jobs:
           set -o pipefail
           ./test_POST 2>&1 | tee test_POST.log
 
-      - name: Upload test logs
+      - name: Upload C test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-logs-windows-latest
           path: bin/*.log
+          if-no-files-found: ignore
+
+      # ================================================================
+      # Language bindings (test.py / test.js / Test.java) — Windows
+      # ================================================================
+
+      # Python: cffi already handles Windows (http2_client.py detects the
+      # platform and uses libhttp2client.dll).  build.sh installs cffi via
+      # MSYS2 pip (mingw-w64-x86_64-python-pip package).
+      - name: Python — run test.py (Windows)
+        id: py_test_win
+        shell: msys2 {0}
+        run: |
+          set -o pipefail
+          cd "${{ github.workspace }}"
+          bash python/build.sh 2>&1 | tee python_test.log
+          echo "---"
+          if grep -q "All tests passed" python_test.log; then
+            echo "::notice:: Python test PASSED"
+          fi
+
+      - name: Upload Python test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-log-windows-latest
+          path: python_test.log
+          if-no-files-found: ignore
+
+      # Java: build.sh already handles MSYS2 (resolves JAVA_HOME, requires
+      # gcc).  setup-java provides a JDK; the MSYS2 Maven package handles
+      # compilation.  The JNI bridge is compiled with gcc (-Djni.compiler=gcc)
+      # to match the MinGW-built libhttp2client.dll.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Java — build and run Test.java (Windows)
+        id: java_test_win
+        shell: msys2 {0}
+        run: |
+          set -o pipefail
+          cd "${{ github.workspace }}/java"
+          bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
+          echo "---"
+          if grep -q "All tests passed" "${{ github.workspace }}/java_test.log"; then
+            echo "::notice:: Java test PASSED"
+          fi
+
+      - name: Upload Java test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-test-log-windows-latest
+          path: java_test.log
+          if-no-files-found: ignore
+
+      # Node.js: uses the MSYS2 mingw-w64 nodejs package (node-gyp targets
+      # MinGW gcc, matching the rest of the toolchain).  Set CC/CXX to ensure
+      # node-gyp picks up the MinGW compiler rather than MSVC.
+      - name: Node.js — build and run test.js (Windows)
+        id: node_test_win
+        shell: msys2 {0}
+        run: |
+          set -o pipefail
+          cd "${{ github.workspace }}/nodejs"
+          export CC=gcc CXX=g++
+          bash build.sh
+          node test.js 2>&1 | tee "${{ github.workspace }}/nodejs_test.log"
+          echo "---"
+          if grep -q "All tests passed" "${{ github.workspace }}/nodejs_test.log"; then
+            echo "::notice:: Node.js test PASSED"
+          fi
+
+      - name: Upload Node.js test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-test-log-windows-latest
+          path: nodejs_test.log
           if-no-files-found: ignore
