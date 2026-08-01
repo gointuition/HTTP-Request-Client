@@ -116,12 +116,9 @@ JAR_NAME="http2-client-${VERSION}.jar"
 # On Windows (MSYS2), override the Maven windows profile's default MSVC
 # compiler with gcc so the JNI bridge links against the MinGW-built
 # libhttp2client.dll without needing an import library.
-# Also set MSYS2_ARG_CONV_EXCL to prevent MSYS2 from mangling Maven -D
-# arguments (required in MINGW64 shell, per README.md).
 JNI_COMPILER_FLAG=""
 if [[ "$OS_NAME" == MINGW* || "$OS_NAME" == MSYS* ]]; then
     JNI_COMPILER_FLAG="-Djni.compiler=gcc"
-    export MSYS2_ARG_CONV_EXCL="*"
 fi
 
 # ── Build everything through Maven ────────────────────────────────────
