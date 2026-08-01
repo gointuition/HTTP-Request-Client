@@ -178,6 +178,7 @@ jobs:
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-tools-git
             unzip
             git
 
@@ -290,4 +291,49 @@ jobs:
           path: java_test.log
           if-no-files-found: ignore
 
+      # Node.js: Windows uses a split toolchain (see nodejs/README.MD
+      # "Windows (MSVC + MinGW dual-toolchain)").  The C library
+      # (libhttp2client.dll) is already built by MinGW above; the addon is
+      # compiled with MSVC via node-gyp.  build-addon.js generates the MSVC
+      # import library (http2client.lib) from the DLL using gendef (MSYS2)
+      # + lib.exe (MSVC), then runs node-gyp rebuild, and finally copies
+      # libhttp2client.dll + MinGW runtime DLLs next to the addon.
+      #
+      # We run from PowerShell (not MSYS2) so node-gyp's MSVC auto-detection
+      # works out of the box (windows-latest ships VS 2022).  The MSYS2
+      # mingw64\bin is prepended to PATH only to expose gendef.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Node.js — build and run test.js (Windows)
+        id: node_test_win
+        shell: pwsh
+        env:
+          # Make gendef (from mingw-w64-x86_64-tools-git) discoverable.
+          PATH: ${{ steps.msys2_setup.outputs.msys2-location }}\mingw64\bin;${{ env.PATH }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location "${{ github.workspace }}\nodejs"
+          # Verify gendef is reachable (the import-lib step needs it).
+          where.exe gendef
+          # npm install triggers build-addon.js (see package.json "install").
+          npm install
+          node test.js 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\nodejs_test.log"
+          Write-Output "---"
+          if (Select-String -Path "${{ github.workspace }}\nodejs_test.log" -Pattern "All tests passed" -Quiet) {
+            Write-Output "::notice:: Node.js test PASSED"
+          } else {
+            Write-Error "Node.js test did not report success"
+            exit 1
+          }
+
+      - name: Upload Node.js test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-test-log-windows-latest
+          path: nodejs_test.log
+          if-no-files-found: ignore
 

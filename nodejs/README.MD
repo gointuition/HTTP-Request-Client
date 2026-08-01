@@ -44,7 +44,7 @@ cmake -B build -G "MinGW Makefiles"
 cmake --build build -j4
 ```
 
-**Step 2 — Build the addon** (any terminal — cmd / PowerShell / MSYS2):
+**Step 2 — Build the addon** (PowerShell):
 
 ```bash
 cd nodejs
