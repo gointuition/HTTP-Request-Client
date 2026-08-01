@@ -318,6 +318,33 @@ jobs:
           Set-Location "${{ github.workspace }}\nodejs"
           # Verify gendef is reachable (the import-lib step needs it).
           where.exe gendef
+
+          # node-gyp's PowerShell-based VS detection is broken on this runner
+          # (its PowerShell spawn crashes with ERR_CHILD_PROCESS_STDIO_MAXB and
+          # it mis-parses the VS 18 install as "unknown version undefined").
+          # Workaround: set VCINSTALLDIR + VSCMD_VER + WindowsSDKVersion to make
+          # node-gyp's non-PowerShell path (findVSFromSpecifiedLocation) succeed.
+          # It needs all three: VCINSTALLDIR for the install path, VSCMD_VER for
+          # the version→year mapping (17.x → 2022), WindowsSDKVersion for the SDK.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $vsInstall) {
+            Write-Error "Visual Studio with VC tools not found via vswhere"
+            exit 1
+          }
+          $env:VCINSTALLDIR = "$vsInstall\VC\"
+          # Pretend it is VS 2022 (17.x) so node-gyp accepts the version. The
+          # MSVC toolset is ABI-compatible across VS 2022/18 for our purposes.
+          $env:VSCMD_VER = "17.0.0"
+          # Pick the latest Windows SDK installed (node-gyp needs one to link).
+          $sdkDir = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Lib" -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1).Name
+          if ($sdkDir) { $env:WindowsSDKVersion = "$sdkDir\" }
+          Write-Output "Using VS: $vsInstall"
+          Write-Output "VCINSTALLDIR=$env:VCINSTALLDIR VSCMD_VER=$env:VSCMD_VER WindowsSDKVersion=$env:WindowsSDKVersion"
+
           # Install deps WITHOUT running the install script, then build
           # explicitly so a build failure aborts before test.js runs.
           npm install --ignore-scripts
