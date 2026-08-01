@@ -328,19 +328,21 @@ jobs:
             exit $LASTEXITCODE
           }
 
-          # VS 2026 ships MSVC 14.5x, which node-gyp 10.x does not map
-          # to a VS year.  Add the missing entries so checkVSVersionInPrompt
-          # succeeds instead of returning "undefined".
+          # VS 2026 ships MSVC 14.5x and has installation version 18.x.
+          # node-gyp 10.x's getVersionInfo() only maps versionMajor
+          # 15/16/17 to 2017/2019/2022; versionMajor 18 → returns {},
+          # causing "unknown version 'undefined'".  Insert 18 → 2026
+          # mapping before the unsupported-version bail-out.
           $findVS = "node_modules\node-gyp\lib\find-visualstudio.js"
           if (Test-Path $findVS) {
             $content = Get-Content $findVS -Raw
-            $marker = "  '14.40': 2022,"
-            $newEntries = "  '14.50': 2026,`n  '14.51': 2026,`n  '14.52': 2026,`n  '14.53': 2026,`n  '14.54': 2026,`n  '14.55': 2026,"
-            if ($content -match [regex]::Escape($marker) -and $content -notmatch '14\.51.*2026') {
-              $patched = $content.Replace($marker, "$marker`n$newEntries")
+            $marker = "if (ret.versionMajor === 17) {`n    ret.versionYear = 2022`n    return ret`n  }"
+            $newBlock = "if (ret.versionMajor === 18) {`n    ret.versionYear = 2026`n    return ret`n  }`n  "
+            if ($content -match [regex]::Escape($marker) -and $content -notmatch 'versionMajor === 18.*2026') {
+              $patched = $content -replace [regex]::Escape($marker), "$marker`n  $newBlock"
               Set-Content $findVS $patched -NoNewline
-              Write-Host "::notice:: Patched node-gyp: added MSVC 14.50–14.55 → VS 2026"
-            } elseif ($content -match '14\.51.*2026') {
+              Write-Host "::notice:: Patched node-gyp: added versionMajor 18 → VS 2026"
+            } elseif ($content -match 'versionMajor === 18.*2026') {
               Write-Host "::notice:: node-gyp already patched for VS 2026"
             } else {
               Write-Host "::warning:: Patch marker not found; node-gyp may have changed"
