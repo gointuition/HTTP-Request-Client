@@ -67,3 +67,63 @@ jobs:
           name: test-logs-${{ matrix.os }}
           path: bin/*.log
           if-no-files-found: ignore
+
+  # Windows builds use MSYS2 / MinGW-w64 (native MSVC is not supported).
+  # See README.md "Windows (MSYS2 / MinGW-w64)" for the toolchain setup.
+  build-and-test-windows:
+    name: windows-latest
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        # All shell steps run inside the MSYS2 MINGW64 environment.
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-ninja
+            git
+
+      - name: Cache third-party sources
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: third-party-Windows-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+
+      - name: Smoke test — GET
+        working-directory: bin
+        run: |
+          ./test_GET | tee test_GET.log
+          ../.github/scripts/assert_basket.sh test_GET.log
+
+      - name: Smoke test — POST
+        working-directory: bin
+        run: |
+          ./test_POST | tee test_POST.log
+          ../.github/scripts/assert_basket.sh test_POST.log
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-windows-latest
+          path: bin/*.log
+          if-no-files-found: ignore
