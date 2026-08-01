@@ -295,14 +295,17 @@ jobs:
       # needed to generate the import library.  Run from pwsh so that
       # node-gyp can find VS natively; add the MSYS2 MINGW64 bin directory
       # to PATH for gendef.
-      # npm_config_msvs_version=2022 forces node-gyp to use VS 2022 via
-      # vswhere, skipping VS 2026 (v18) which node-gyp does not recognise.
+      # windows-latest ships VS 2026 (v18) whose MSVC toolset (14.5x) is
+      # not yet in node-gyp's version map.  We patch find-visualstudio.js
+      # after dependencies are installed and before the addon is built.
       # See nodejs/README.MD.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
       - name: Node.js — build and run test.js (Windows)
         id: node_test_win
         shell: pwsh
-        env:
-          npm_config_msvs_version: 2022
         run: |
           $ErrorActionPreference = "Stop"
           # Add MSYS2 MINGW64 bin to PATH (for build-addon.js → gendef).
@@ -315,11 +318,42 @@ jobs:
             Write-Host "::warning:: MSYS2 MINGW64 bin not found at $mingwBin"
           }
           Set-Location "${{ github.workspace }}\nodejs"
-          npm install
+
+          # Install dependencies without triggering the "install" script
+          # (which runs build-addon.js → node-gyp rebuild).  We need to
+          # patch node-gyp first.
+          npm install --ignore-scripts
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error:: npm install failed with exit code $LASTEXITCODE"
+            Write-Host "::error:: npm install --ignore-scripts failed"
             exit $LASTEXITCODE
           }
+
+          # VS 2026 ships MSVC 14.5x, which node-gyp 10.x does not map
+          # to a VS year.  Add the missing entries so checkVSVersionInPrompt
+          # succeeds instead of returning "undefined".
+          $findVS = "node_modules\node-gyp\lib\find-visualstudio.js"
+          if (Test-Path $findVS) {
+            $content = Get-Content $findVS -Raw
+            $marker = "  '14.40': 2022,"
+            $newEntries = "  '14.50': 2026,`n  '14.51': 2026,`n  '14.52': 2026,`n  '14.53': 2026,`n  '14.54': 2026,`n  '14.55': 2026,"
+            if ($content -match [regex]::Escape($marker) -and $content -notmatch '14\.51.*2026') {
+              $patched = $content.Replace($marker, "$marker`n$newEntries")
+              Set-Content $findVS $patched -NoNewline
+              Write-Host "::notice:: Patched node-gyp: added MSVC 14.50–14.55 → VS 2026"
+            } elseif ($content -match '14\.51.*2026') {
+              Write-Host "::notice:: node-gyp already patched for VS 2026"
+            } else {
+              Write-Host "::warning:: Patch marker not found; node-gyp may have changed"
+            }
+          }
+
+          # Now run the full build (gendef + lib.exe + node-gyp rebuild + copy DLLs)
+          node build-addon.js
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error:: build-addon.js failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
           node test.js 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\nodejs_test.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $log = Get-Content "${{ github.workspace }}\nodejs_test.log" -Raw
