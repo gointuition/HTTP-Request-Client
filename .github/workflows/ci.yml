@@ -310,11 +310,11 @@ jobs:
       - name: Node.js — build and run test.js (Windows)
         id: node_test_win
         shell: pwsh
-        env:
-          # Make gendef (from mingw-w64-x86_64-tools-git) discoverable.
-          PATH: ${{ steps.msys2_setup.outputs.msys2-location }}\mingw64\bin;${{ env.PATH }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # Prepend MSYS2 mingw64\bin so gendef (from mingw-w64-x86_64-tools-git)
+          # is discoverable; keep the rest of PATH (System32, VS, ...) intact.
+          $env:PATH = "${{ steps.msys2_setup.outputs.msys2-location }}\mingw64\bin;" + $env:PATH
           Set-Location "${{ github.workspace }}\nodejs"
           # Verify gendef is reachable (the import-lib step needs it).
           where.exe gendef
