@@ -42,21 +42,22 @@ jobs:
       - name: Build
         run: cmake --build build --parallel 4
 
-      # The test executables always exit 0 on request errors, so assert on the
-      # logged basket JSON instead: .error must be an empty object and
-      # .response.payload must be non-empty (see .github/scripts/assert_basket.sh).
+      # Test executables now validate basket JSON internally and exit non-zero on
+      # failure. assert_basket.sh provides an additional safety-net via log parsing.
       - name: Smoke test — GET
         shell: bash
         working-directory: bin
         run: |
-          ./test_GET | tee test_GET.log
+          set -o pipefail
+          ./test_GET 2>&1 | tee test_GET.log
           ../.github/scripts/assert_basket.sh test_GET.log
 
       - name: Smoke test — POST
         shell: bash
         working-directory: bin
         run: |
-          ./test_POST | tee test_POST.log
+          set -o pipefail
+          ./test_POST 2>&1 | tee test_POST.log
           ../.github/scripts/assert_basket.sh test_POST.log
 
       # Surface the built artifacts for quick inspection on failures.
@@ -111,13 +112,15 @@ jobs:
       - name: Smoke test — GET
         working-directory: bin
         run: |
-          ./test_GET | tee test_GET.log
+          set -o pipefail
+          ./test_GET 2>&1 | tee test_GET.log
           ../.github/scripts/assert_basket.sh test_GET.log
 
       - name: Smoke test — POST
         working-directory: bin
         run: |
-          ./test_POST | tee test_POST.log
+          set -o pipefail
+          ./test_POST 2>&1 | tee test_POST.log
           ../.github/scripts/assert_basket.sh test_POST.log
 
       - name: Upload test logs

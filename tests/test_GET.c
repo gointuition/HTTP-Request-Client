@@ -3,6 +3,7 @@
 //
 
 #include <stdio.h>
+#include <string.h>
 
 //#include "jansson.h"
 
@@ -10,7 +11,21 @@
 #include "Http2Client.h"
 #include "Log.h"
 
+static int validateBasket(const char *basketStr) {
+    if (strstr(basketStr, "\"error\":{}") == NULL) {
+        LOG("ERROR", "basket error is not empty");
+        return 0;
+    }
+    if (strstr(basketStr, "\"payload\":\"\"") != NULL
+        || strstr(basketStr, "\"response\":") == NULL) {
+        LOG("ERROR", "response.payload is empty or missing");
+        return 0;
+    }
+    return 1;
+}
+
 int main(int argc, char *argv[]) {
+    int ret = EXIT_SUCCESS;
 
     initialiseEnv();
 
@@ -37,9 +52,13 @@ int main(int argc, char *argv[]) {
         }
         getBasketContent(result, basketStr);
         LOG("DEBUG", "basket json %s", basketStr);
+        if (!validateBasket(basketStr)) {
+            ret = EXIT_FAILURE;
+        }
         free(basketStr);
     } else {
-        LOG("ERROR", "failed to handle request");
+        LOG("ERROR", "failed to handle request (first)");
+        ret = EXIT_FAILURE;
     }
 
 //    sleep(5);
@@ -60,15 +79,19 @@ int main(int argc, char *argv[]) {
         }
         getBasketContent(result, basketStr);
         LOG("DEBUG", "basket json %s", basketStr);
+        if (!validateBasket(basketStr)) {
+            ret = EXIT_FAILURE;
+        }
         free(basketStr);
     } else {
-        LOG("ERROR", "failed to handle request");
+        LOG("ERROR", "failed to handle request (second)");
+        ret = EXIT_FAILURE;
     }
     free(requestStr);
 
     cleanupEnv();
 
-    return 0;
+    return ret;
 }
 
 //
