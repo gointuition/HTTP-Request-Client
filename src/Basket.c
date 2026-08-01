@@ -180,6 +180,7 @@ static void parsePayload(Basket *basket, const json_t *jsonRequest) {
     if (jsonPayload != NULL) {
         // TODO JSON_INDENT, JSON_ENSURE_ASCII, JSON_SORT_KEYS, JSON_PRESERVE_ORDER, JSON_ENCODE_ANY
         basket -> request.payload = json_dumps(jsonPayload, JSON_COMPACT);
+        LOG("INFO", "payload: %s\n length: %lu", basket -> request.payload, strlen(basket -> request.payload));
         if (basket -> request.containsContentLength != 1) {
             LOG("ERROR", "missing header content-length");
             basket -> error = ERR_REQUEST_PARSING_CONTENTLENGTH_FAILED;
