@@ -239,17 +239,11 @@ jobs:
           path: python_test.log
           if-no-files-found: ignore
 
-      # Maven: not an MSYS2 MINGW64 package; install upstream binary
-      # manually.  MSYS2 inherits the Windows PATH so java/build.sh finds
-      # it without trouble.
-      - name: Install Maven
-        shell: msys2 {0}
-        run: |
-          MAVEN_VERSION=3.9.9
-          curl -fsSL "https://dlcdn.apache.org/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.zip" -o /tmp/maven.zip
-          unzip -qo /tmp/maven.zip -d /tmp
-          echo "/tmp/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
-          mvn --version
+      # Maven: use the community setup-maven action (adds mvn to the
+      # Windows PATH, which MSYS2 inherits).
+      - uses: stCarolas/setup-maven@v5
+        with:
+          maven-version: 3.9.9
 
       # Java: build.sh already handles MSYS2 (resolves JAVA_HOME, requires
       # gcc).  setup-java provides a JDK.  The JNI bridge is compiled with
