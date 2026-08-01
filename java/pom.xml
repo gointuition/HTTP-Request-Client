@@ -260,13 +260,11 @@
             </plugin>
 
             <!-- Convenience: mvn exec:java -Dexec.mainClass=Test -->
+            <!-- NOTE: no <mainClass> default here; always pass -Dexec.mainClass=... -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.1.0</version>
-                <configuration>
-                    <mainClass>Test</mainClass>
-                </configuration>
             </plugin>
         </plugins>
     </build>

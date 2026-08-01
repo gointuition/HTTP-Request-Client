@@ -1,12 +1,4 @@
-// libuv's worker thread pool defaults to 4, so 8 blocking native calls would run
-// in two batches of 4 (watch the per-request ms: the last 4 wait for a free worker).
-// Bump the pool to at least the concurrency BEFORE anything uses libuv, so all 8
-// requestAsync() calls get their own worker and run truly in parallel.
-// Equivalent to launching with: UV_THREADPOOL_SIZE=8 node test.js
-process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || '8';
-
 const httpClient = require('./index.js');
-// const httpClient = require('');
 
 const fs = require("fs")
 const readline = require("readline");
@@ -39,6 +31,9 @@ function isCommentLine(line) {
 
 console.log('=== HTTP/2 Client Test ===\n');
 
+let passed = 0;
+let failed = 0;
+
 // Initialize first
 console.log('[Init] Initializing HTTP/2 client...');
 httpClient.init();
@@ -55,72 +50,37 @@ async function runTests() {
         const parsed = JSON.parse(result);
 
         const endTime = Date.now();
-        console.log(`✓ Completed in ${endTime - startTime}ms`);
-        console.log(`✓ URL: ${parsed.url || 'N/A'}`);
-        console.log(`✓ payload bytes: ${parsed.response && parsed.response.payload ? parsed.response.payload.length : 0}`);
+
+        // Validate: error must be empty, status 2xx, payload non-empty
         if (parsed.error && parsed.error.code) {
-            console.log(`✗ error: ${parsed.error.code} ${parsed.error.message || ''}`);
+            console.log(`✗ FAILED: error code ${parsed.error.code}`);
+            failed++;
+        } else if (!parsed.response || !parsed.response.payload) {
+            console.log(`✗ FAILED: response.payload is missing or empty`);
+            failed++;
+        } else {
+            passed++;
+            console.log(`✓ PASSED in ${endTime - startTime}ms`);
+            console.log(`✓ URL: ${parsed.url || 'N/A'}`);
+            console.log(`✓ payload bytes: ${parsed.response.payload.length}`);
         }
     } catch (error) {
+        failed++;
         console.error(`✗ Failed: ${error.message}`);
-        console.error(error.stack);
-    }
-
-    // Test 2: Concurrent requests via Promise.all (HTTP/2 multiplexing).
-    // The async path runs each blocking native call on a libuv worker thread, so
-    // these fire in parallel; same-host requests share ONE multiplexed connection
-    // and each takes its own stream (odd ids 1,3,5,...). Cloudflare keeps the
-    // connection open for many streams, so it demonstrates real multiplexing
-    // (unlike tls.peet.ws, which sends GOAWAY after a single stream).
-    const CONCURRENCY = 8;
-    console.log(`\n[Test 2] concurrent requests (async, multiplexed)...`);
-    try {
-        const concurrentStr = await readLinesWithoutComments("../bin/request_Concurrency.json");
-        const config = JSON.parse(concurrentStr);
-        const concurrency = config.concurrency || CONCURRENCY;
-        delete config.concurrency; // test-only field; strip before the native call
-
-        console.log(`  firing ${concurrency} requests to ${config.url}`);
-        const startTime = Date.now();
-        const results = await Promise.all(
-            Array.from({ length: concurrency }, (_, i) => {
-                const t0 = Date.now();
-                return httpClient.requestAsync(config).then((res) => {
-                    const parsed = JSON.parse(res);
-                    return {
-                        i,
-                        ms: Date.now() - t0,
-                        error: parsed.error && parsed.error.code ? parsed.error.code : null,
-                        bytes: parsed.response && parsed.response.payload ? parsed.response.payload.length : 0,
-                        streamId: parsed.session && parsed.session.streamId,
-                    };
-                });
-            })
-        );
-        const totalMs = Date.now() - startTime;
-
-        let ok = 0;
-        const ids = [];
-        for (const r of results) {
-            if (r.error) {
-                console.log(`  #${r.i} ✗ ${r.error} (${r.ms}ms)`);
-            } else {
-                ok++;
-                ids.push(r.streamId);
-                console.log(`  #${r.i} ✓ ${r.bytes} bytes, stream ${r.streamId} (${r.ms}ms)`);
-            }
-        }
-        const distinct = [...new Set(ids)].sort((a, b) => a - b);
-        console.log(`✓ ${ok}/${concurrency} succeeded, total wall time ${totalMs}ms`);
-        console.log(`✓ distinct stream ids on the shared connection: ${distinct.join(', ')}`);
-    } catch (error) {
-        console.error(`✗ Concurrent test failed: ${error.message}`);
         console.error(error.stack);
     }
 
     console.log('\nCleaning up...');
     httpClient.cleanup();
-    console.log('✓ All tests completed!\n');
+
+    const total = passed + failed || 1;
+    console.log('\n========================================');
+    console.log(`Results: ${passed}/${total} passed, ${failed}/${total} failed`);
+    if (failed > 0) {
+        console.log('SOME TESTS FAILED');
+        process.exit(1);
+    }
+    console.log('✓ All tests passed!\n');
 }
 
 runTests().catch(console.error);

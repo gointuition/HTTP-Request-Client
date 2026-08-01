@@ -67,6 +67,89 @@ jobs:
           path: bin/*.log
           if-no-files-found: ignore
 
+      # ================================================================
+      # Language bindings (test.py / test.js / Test.java)
+      # Every binding test exits non-zero on failure (sys.exit(1) /
+      # process.exit(1) / System.exit(1)), so the step itself captures
+      # pass/fail.  Output is additionally captured as a log artifact
+      # for post-mortem inspection.
+      # ================================================================
+
+      # Python binding (cffi ABI mode — loads the shared library directly,
+      # no C compiler needed).  build.sh installs cffi and runs test.py.
+      # See python/README.md.
+      - name: Python — run test.py
+        id: py_test
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "${{ github.workspace }}"
+          bash python/build.sh 2>&1 | tee python_test.log
+          echo "---"
+          if grep -q "All tests passed" python_test.log; then
+            echo "::notice:: Python test PASSED"
+          fi
+
+      - name: Upload Python test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-log-${{ matrix.os }}
+          path: python_test.log
+          if-no-files-found: ignore
+
+      # Java binding (JNI bridge; builds a fat JAR linking http2client + JNI
+      # bridge, then runs Test.java from the JAR).  See java/build.sh.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Java — build and run Test.java
+        id: java_test
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "${{ github.workspace }}/java"
+          bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
+          echo "---"
+          if grep -q "All tests passed" "${{ github.workspace }}/java_test.log"; then
+            echo "::notice:: Java test PASSED"
+          fi
+
+      - name: Upload Java test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-test-log-${{ matrix.os }}
+          path: java_test.log
+          if-no-files-found: ignore
+
+      # Node.js binding (N-API native addon via node-gyp).
+      # build.sh runs npm install + build; test.js runs via node.
+      # See nodejs/README.MD.
+      - name: Node.js — build and run test.js
+        id: node_test
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "${{ github.workspace }}/nodejs"
+          bash build.sh
+          node test.js 2>&1 | tee "${{ github.workspace }}/nodejs_test.log"
+          echo "---"
+          if grep -q "All tests passed" "${{ github.workspace }}/nodejs_test.log"; then
+            echo "::notice:: Node.js test PASSED"
+          fi
+
+      - name: Upload Node.js test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-test-log-${{ matrix.os }}
+          path: nodejs_test.log
+          if-no-files-found: ignore
+
   # Windows builds use MSYS2 / MinGW-w64 (native MSVC is not supported).
   # See README.md "Windows (MSYS2 / MinGW-w64)" for the toolchain setup.
   build-and-test-windows:
