@@ -268,6 +268,9 @@ jobs:
           unzip -qo "apache-maven-${MAVEN_VERSION}-bin.zip" -d /tmp
           export PATH="/tmp/apache-maven-${MAVEN_VERSION}/bin:$PATH"
           mvn --version
+          # Prevent MSYS2 from mangling Maven -D arguments; required in
+          # MINGW64 shell per java/README.md.
+          export MSYS2_ARG_CONV_EXCL="*"
           cd "${{ github.workspace }}/java"
           bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
           echo "---"
@@ -286,9 +289,15 @@ jobs:
       # Node.js: the split toolchain on Windows requires MSVC for the
       # addon (node-gyp's default on win32) while gendef (from MSYS2) is
       # needed to generate the import library.  Run from pwsh so that
-      # node-gyp can find the VS 2022 installation natively; add the
-      # MSYS2 MINGW64 bin directory to PATH for gendef.
+      # node-gyp can find VS natively; add the MSYS2 MINGW64 bin directory
+      # to PATH for gendef.
+      # msvc-dev-cmd sets VCINSTALLDIR & friends so node-gyp skips version
+      # probing — works with VS 2022, VS 2026, and any future version.
       # See nodejs/README.MD.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
       - name: Node.js — build and run test.js (Windows)
         id: node_test_win
         shell: pwsh
