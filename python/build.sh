@@ -33,9 +33,11 @@ echo "Python version:"
 python3 --version
 
 # Install cffi dependency
+# --break-system-packages: needed on macOS runners where PEP 668 marks the
+# system Python as externally managed (Python ≥ 3.11 on Homebrew).
 echo ""
 echo "Installing cffi dependency..."
-pip3 install cffi
+python3 -m pip install cffi --break-system-packages 2>/dev/null || pip3 install cffi
 
 # Run test
 echo ""
