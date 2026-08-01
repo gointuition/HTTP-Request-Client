@@ -42,15 +42,14 @@ jobs:
       - name: Build
         run: cmake --build build --parallel 4
 
-      # Test executables now validate basket JSON internally and exit non-zero on
-      # failure. assert_basket.sh provides an additional safety-net via log parsing.
+      # Test executables validate basket JSON internally via jansson and exit
+      # non-zero on failure. Logs are still captured for inspection via artifacts.
       - name: Smoke test — GET
         shell: bash
         working-directory: bin
         run: |
           set -o pipefail
           ./test_GET 2>&1 | tee test_GET.log
-          ../.github/scripts/assert_basket.sh test_GET.log
 
       - name: Smoke test — POST
         shell: bash
@@ -58,7 +57,6 @@ jobs:
         run: |
           set -o pipefail
           ./test_POST 2>&1 | tee test_POST.log
-          ../.github/scripts/assert_basket.sh test_POST.log
 
       # Surface the built artifacts for quick inspection on failures.
       - name: Upload test logs
@@ -114,14 +112,12 @@ jobs:
         run: |
           set -o pipefail
           ./test_GET 2>&1 | tee test_GET.log
-          ../.github/scripts/assert_basket.sh test_GET.log
 
       - name: Smoke test — POST
         working-directory: bin
         run: |
           set -o pipefail
           ./test_POST 2>&1 | tee test_POST.log
-          ../.github/scripts/assert_basket.sh test_POST.log
 
       - name: Upload test logs
         if: always()
