@@ -167,6 +167,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up MSYS2
+        id: msys2_setup
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -306,13 +307,21 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          # Add MSYS2 MINGW64 bin to PATH (for build-addon.js → gendef)
-          $msys2MingwBin = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin"
-          if (Test-Path $msys2MingwBin) {
-            $env:Path = "$msys2MingwBin;$env:Path"
+          # Add MSYS2 MINGW64 bin to PATH (for build-addon.js → gendef).
+          # Use the installer's output to locate the exact MSYS2 root.
+          $mingwBin = Join-Path "${{ steps.msys2_setup.outputs.msys2-location }}" "mingw64\bin"
+          Write-Host "::debug:: Adding $mingwBin to PATH"
+          if (Test-Path $mingwBin) {
+            $env:Path = "$mingwBin;$env:Path"
+          } else {
+            Write-Host "::warning:: MSYS2 MINGW64 bin not found at $mingwBin"
           }
           Set-Location "${{ github.workspace }}\nodejs"
           npm install
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error:: npm install failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
           node test.js 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\nodejs_test.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $log = Get-Content "${{ github.workspace }}\nodejs_test.log" -Raw
