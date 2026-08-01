@@ -318,9 +318,15 @@ jobs:
           Set-Location "${{ github.workspace }}\nodejs"
           # Verify gendef is reachable (the import-lib step needs it).
           where.exe gendef
-          # npm install triggers build-addon.js (see package.json "install").
-          npm install
+          # Install deps WITHOUT running the install script, then build
+          # explicitly so a build failure aborts before test.js runs.
+          npm install --ignore-scripts
+          # build-addon.js: generates http2client.lib (gendef + lib.exe),
+          # runs node-gyp rebuild (MSVC), copies runtime DLLs next to addon.
+          npm run build
+          if ($LASTEXITCODE -ne 0) { Write-Error "addon build failed"; exit 1 }
           node test.js 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\nodejs_test.log"
+          if ($LASTEXITCODE -ne 0) { Write-Error "test.js failed"; exit 1 }
           Write-Output "---"
           if (Select-String -Path "${{ github.workspace }}\nodejs_test.log" -Pattern "All tests passed" -Quiet) {
             Write-Output "::notice:: Node.js test PASSED"
