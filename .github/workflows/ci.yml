@@ -259,6 +259,14 @@ jobs:
         shell: msys2 {0}
         run: |
           set -o pipefail
+          # setup-java sets JAVA_HOME as a Windows path.  MSYS2 does not
+          # automatically add GITHUB_PATH entries to its own PATH, so we
+          # explicitly convert and export here.
+          if [ -n "$JAVA_HOME" ]; then
+            JAVA_BIN="$(cygpath -u "$JAVA_HOME")/bin"
+            export PATH="$JAVA_BIN:$PATH"
+          fi
+          java -version
           cd "${{ github.workspace }}/java"
           bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
           echo "---"
