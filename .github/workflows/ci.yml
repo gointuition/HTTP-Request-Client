@@ -177,7 +177,6 @@ jobs:
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-python-pip
-            mingw-w64-x86_64-nodejs
             unzip
             git
 
@@ -284,22 +283,30 @@ jobs:
           path: java_test.log
           if-no-files-found: ignore
 
-      # Node.js: uses the MSYS2 mingw-w64 nodejs package (node-gyp targets
-      # MinGW gcc, matching the rest of the toolchain).  Set CC/CXX to ensure
-      # node-gyp picks up the MinGW compiler rather than MSVC.
+      # Node.js: the split toolchain on Windows requires MSVC for the
+      # addon (node-gyp's default on win32) while gendef (from MSYS2) is
+      # needed to generate the import library.  Run from pwsh so that
+      # node-gyp can find the VS 2022 installation natively; add the
+      # MSYS2 MINGW64 bin directory to PATH for gendef.
+      # See nodejs/README.MD.
       - name: Node.js — build and run test.js (Windows)
         id: node_test_win
-        shell: msys2 {0}
+        shell: pwsh
         run: |
-          set -o pipefail
-          cd "${{ github.workspace }}/nodejs"
-          export CC=gcc CXX=g++
-          bash build.sh
-          node test.js 2>&1 | tee "${{ github.workspace }}/nodejs_test.log"
-          echo "---"
-          if grep -q "All tests passed" "${{ github.workspace }}/nodejs_test.log"; then
-            echo "::notice:: Node.js test PASSED"
-          fi
+          $ErrorActionPreference = "Stop"
+          # Add MSYS2 MINGW64 bin to PATH (for build-addon.js → gendef)
+          $msys2MingwBin = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin"
+          if (Test-Path $msys2MingwBin) {
+            $env:Path = "$msys2MingwBin;$env:Path"
+          }
+          Set-Location "${{ github.workspace }}\nodejs"
+          npm install
+          node test.js 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\nodejs_test.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $log = Get-Content "${{ github.workspace }}\nodejs_test.log" -Raw
+          if ($log -match "All tests passed") {
+            Write-Host "::notice:: Node.js test PASSED"
+          }
 
       - name: Upload Node.js test log
         if: always()
