@@ -178,6 +178,7 @@ jobs:
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-python-pip
             mingw-w64-x86_64-nodejs
+            unzip
             git
 
       - name: Cache third-party sources
