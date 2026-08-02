@@ -206,6 +206,29 @@ jobs:
             include/*.h
           if-no-files-found: error
 
+      # Publish language bindings built above, so the release job can bundle
+      # them alongside the shared library per platform.
+      - name: Upload Node.js addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-addon-${{ matrix.os }}
+          path: nodejs
+          if-no-files-found: error
+
+      - name: Upload Python binding
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-binding-${{ matrix.os }}
+          path: python
+          if-no-files-found: error
+
+      - name: Upload Java JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-jar-${{ matrix.os }}
+          path: java/build/*.jar
+          if-no-files-found: error
+
   # Windows builds use MSYS2 / MinGW-w64 (native MSVC is not supported).
   # See README.md "Windows (MSYS2 / MinGW-w64)" for the toolchain setup.
   build-and-test-windows:
@@ -499,6 +522,29 @@ jobs:
             include/*.h
           if-no-files-found: error
 
+      # Publish language bindings built above, so the release job can bundle
+      # them alongside the shared library per platform.
+      - name: Upload Node.js addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-addon-windows-latest
+          path: nodejs
+          if-no-files-found: error
+
+      - name: Upload Python binding
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-binding-windows-latest
+          path: python
+          if-no-files-found: error
+
+      - name: Upload Java JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-jar-windows-latest
+          path: java/build/*.jar
+          if-no-files-found: error
+
   # ================================================================
   # Release — publishes the compiled shared library + public headers
   # to a GitHub Release. Triggered only when a `v*` tag is pushed
@@ -514,28 +560,25 @@ jobs:
       contents: write   # required to create a GitHub Release + upload assets
 
     steps:
-      - name: Download all library artifacts
+      - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: lib-http2client-*
+          pattern: '{lib-http2client-*,nodejs-addon-*,python-binding-*,java-jar-*}'
           merge-multiple: false
           path: artifacts
 
-      # Re-package each platform's library into a per-platform tarball so
-      # consumers get a clean bundle (shared lib + headers) per OS/arch.
+      # Re-package each platform's bundle: shared library + headers + the three
+      # language bindings (Node addon, Python files, Java fat JAR) built for that
+      # same platform, so consumers get a ready-to-use package per OS/arch.
       - name: Package per-platform bundles
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"
           echo "Packaging release assets for ${VERSION}"
-          mkdir -p dist
+          mkdir -p dist work
+
           for os in ubuntu-latest macos-latest windows-latest; do
-            src="artifacts/lib-http2client-${os}"
-            if [ ! -d "$src" ]; then
-              echo "::error:: missing artifact for ${os}"
-              exit 1
-            fi
             # Normalize platform name (windows-latest -> win, etc.).
             case "$os" in
               ubuntu-latest)  plat="linux" ;;
@@ -543,17 +586,52 @@ jobs:
               windows-latest) plat="win" ;;
               *)              plat="$os" ;;
             esac
+
+            lib="artifacts/lib-http2client-${os}"
+            node="artifacts/nodejs-addon-${os}"
+            py="artifacts/python-binding-${os}"
+            jar="artifacts/java-jar-${os}"
+
+            if [ ! -d "$lib" ] || [ ! -d "$node" ] || [ ! -d "$py" ] || [ ! -d "$jar" ]; then
+              echo "::error:: missing release artifact for ${os} (have: $(ls artifacts))"
+              exit 1
+            fi
+
+            # Assemble a clean staging tree for the platform bundle.
+            stage="work/bundle-${plat}"
+            rm -rf "$stage" && mkdir -p "$stage"
+            cp -R "$lib"/. "$stage"/            # shared lib + include/
+            cp -R "$node"  "$stage"/nodejs     # N-API addon + index.js + node_modules
+            cp -R "$py"    "$stage"/python     # Python binding (.py)
+            cp "$jar"/*.jar "$stage"/           # Java fat JAR (platform build)
+
             bundle="http2client-${VERSION}-${plat}"
-            tar -czf "dist/${bundle}.tar.gz" -C "$src" .
+            tar -czf "dist/${bundle}.tar.gz" -C "$stage" .
             echo "Created dist/${bundle}.tar.gz"
           done
+
+      # The Java fat JAR is platform-agnostic (JVM bytecode + native libs bundled
+      # inside), so also publish one canonical, cross-platform artifact.
+      - name: Publish cross-platform Java JAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          jar="artifacts/java-jar-ubuntu-latest"/*.jar
+          if [ ! -f $jar ]; then
+            echo "::error:: Java JAR artifact not found"
+            exit 1
+          fi
+          # Strip the embedded version so the published name is stable.
+          cp $jar "dist/http2-client-java-${VERSION}.jar"
+          echo "Created dist/http2-client-java-${VERSION}.jar"
 
       - name: Generate checksums
         shell: bash
         run: |
           set -euo pipefail
           cd dist
-          sha256sum *.tar.gz > "checksums-${GITHUB_REF_NAME}.sha256"
+          sha256sum *.tar.gz *.jar > "checksums-${GITHUB_REF_NAME}.sha256"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -565,6 +643,7 @@ jobs:
           generate_release_notes: true
           files: |
             dist/*.tar.gz
+            dist/*.jar
             dist/checksums-${{ github.ref_name }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
