@@ -706,6 +706,11 @@ jobs:
                  artifacts/nodejs-addon-ubuntu-latest/index.d.ts \
                  "$node_pkg"/ 2>/dev/null || true
           cp -R work/node/prebuilds "$node_pkg"/prebuilds
+          # npm only renders a lowercase README.md on the registry page; the repo
+          # file is README.MD, so copy it in under the name npm expects.
+          if [ -f "nodejs/README.MD" ]; then
+            cp "nodejs/README.MD" "$node_pkg/README.md"
+          fi
           if command -v npm >/dev/null 2>&1; then
             ( cd "$node_pkg" && npm pack )
             mv "$node_pkg"/*.tgz "dist/http2-client-nodejs-${VERSION}.tgz"

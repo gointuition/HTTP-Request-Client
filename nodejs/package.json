@@ -18,11 +18,20 @@
   ],
   "author": "Intuition",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gointuition/HTTP-Request-Client.git"
+  },
+  "homepage": "https://github.com/gointuition/HTTP-Request-Client#readme",
+  "bugs": {
+    "url": "https://github.com/gointuition/HTTP-Request-Client/issues"
+  },
   "files": [
     "index.js",
     "index.d.ts",
     "load-addon.js",
     "binding.gyp",
+    "README.md",
     "prebuilds/**"
   ],
   "devDependencies": {
