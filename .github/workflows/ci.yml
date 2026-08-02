@@ -187,6 +187,15 @@ jobs:
             echo "::notice:: Node.js test PASSED"
           fi
 
+      # `npm install` (run by build.sh) re-injects gypfile:true and an install
+      # script ("node-gyp rebuild") into nodejs/package.json because binding.gyp
+      # exists. Those fields MUST NOT ship in the published package (they force
+      # every consumer to compile from source, ignoring the prebuilt .node).
+      # Restore the pristine package.json from git before uploading the artifact.
+      - name: Restore pristine nodejs/package.json
+        shell: bash
+        run: git checkout -- nodejs/package.json
+
       - name: Upload Node.js test log
         if: always()
         uses: actions/upload-artifact@v4
@@ -539,6 +548,13 @@ jobs:
           name: nodejs-test-log-windows-latest
           path: nodejs_test.log
           if-no-files-found: ignore
+
+      # Same as the non-Windows job: npm install re-injects gypfile:true and an
+      # install script into nodejs/package.json. Restore the pristine git version
+      # so the published package does not force consumers to compile from source.
+      - name: Restore pristine nodejs/package.json
+        shell: bash
+        run: git checkout -- nodejs/package.json
 
       # Publish the compiled shared library (libhttp2client.dll, staged next to
       # the test/Node addon) + public headers for the release job.
