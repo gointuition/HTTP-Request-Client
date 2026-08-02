@@ -629,6 +629,9 @@ jobs:
       contents: write   # required to create a GitHub Release + upload assets
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -719,10 +722,17 @@ jobs:
           rm -rf "$node_pkg" && mkdir -p "$node_pkg"
           cp -R artifacts/nodejs-addon-ubuntu-latest/index.js \
                  artifacts/nodejs-addon-ubuntu-latest/load-addon.js \
-                 artifacts/nodejs-addon-ubuntu-latest/package.json \
-                 artifacts/nodejs-addon-ubuntu-latest/binding.gyp \
                  artifacts/nodejs-addon-ubuntu-latest/index.d.ts \
                  "$node_pkg"/ 2>/dev/null || true
+          # CRITICAL: do NOT copy package.json from the artifact. build.sh runs
+          # `npm install` in the nodejs/ dir, which re-injects gypfile:true and an
+          # `install: "node-gyp rebuild"` script into package.json (because
+          # binding.gyp exists). Those fields force every consumer to compile from
+          # source, ignoring the prebuilt .node. Instead, extract the pristine
+          # package.json straight from git HEAD so the published package has no
+          # install script / gypfile. Also skip binding.gyp entirely (not needed
+          # at install time; load-addon.js uses prebuilds/).
+          git show HEAD:nodejs/package.json > "$node_pkg/package.json"
           cp -R work/node/prebuilds "$node_pkg"/prebuilds
           # npm only renders a lowercase README.md on the registry page. The
           # nodejs-addon-* artifact carries the repo's README (renamed to lowercase
