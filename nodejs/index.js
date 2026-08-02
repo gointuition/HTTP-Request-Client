@@ -1,4 +1,4 @@
-const addon = require('./build/Release/http2addon.node');
+const addon = require('./load-addon');
 
 class HttpClient {
     constructor() {

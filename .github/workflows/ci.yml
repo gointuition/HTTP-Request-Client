@@ -222,6 +222,34 @@ jobs:
           path: python
           if-no-files-found: error
 
+      # Build a platform-specific wheel (standard cross-platform Python packaging).
+      # The native lib is copied into python/lib/ and shipped inside the wheel via
+      # package_data, so each OS/arch produces its own self-contained .whl.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build Python wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ github.workspace }}/python"
+          python3 -m pip install --quiet --break-system-packages build cffi 2>/dev/null || python3 -m pip install --quiet build cffi
+          LIB_NAME="libhttp2client.so"
+          case "$(uname)" in Darwin) LIB_NAME="libhttp2client.dylib" ;; esac
+          mkdir -p lib
+          cp "${{ github.workspace }}/lib/shared/$LIB_NAME" "lib/$LIB_NAME"
+          python3 -m build --wheel --outdir dist
+          ls -1 dist
+
+      - name: Upload Python wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.os }}
+          path: python/dist/*.whl
+          if-no-files-found: error
+
       - name: Upload Java JAR
         uses: actions/upload-artifact@v4
         with:
@@ -538,6 +566,30 @@ jobs:
           path: python
           if-no-files-found: error
 
+      # Build a platform-specific wheel (standard cross-platform Python packaging).
+      - name: Set up Python (Windows)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build Python wheel (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cd "${{ github.workspace }}\python"
+          python -m pip install --quiet build cffi
+          New-Item -ItemType Directory -Force lib | Out-Null
+          Copy-Item "${{ github.workspace }}\lib\shared\libhttp2client.dll" "lib\libhttp2client.dll"
+          python -m build --wheel --outdir dist
+          Get-ChildItem dist
+
+      - name: Upload Python wheel (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-windows-latest
+          path: python/dist/*.whl
+          if-no-files-found: error
+
       - name: Upload Java JAR
         uses: actions/upload-artifact@v4
         with:
@@ -563,69 +615,128 @@ jobs:
       - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: '{lib-http2client-*,nodejs-addon-*,python-binding-*,java-jar-*}'
+          pattern: '{lib-http2client-*,nodejs-addon-*,python-binding-*,python-wheel-*,java-jar-*}'
           merge-multiple: false
           path: artifacts
 
-      # Release layout:
-      #   C library / Node.js / Python are published PER PLATFORM (each builds its
-      #   own native bits: shared lib, .node addon, .pyd, bundled DLLs).
-      #   Java is published ONCE as a cross-platform fat JAR (platform-agnostic
-      #   JVM bytecode + native libs bundled inside).
-      #   1. C shared library  : http2client-<ver>-<plat>.tar.gz
-      #   2. Node.js binding   : http2client-nodejs-<ver>-<plat>.tar.gz
-      #   3. Python binding    : http2client-python-<ver>-<plat>.tar.gz
-      #   4. Java binding      : http2-client-java-<ver>.jar   (cross-platform)
+      # Release layout — each component follows its language's package-manager
+      # standard, published to GitHub Release as the distribution artifact:
+      #   C library     : http2client-<ver>-all.tar.gz   (linux/ macos/ win/ subdirs)
+      #   Node.js       : http2-client-nodejs-<ver>.tgz  (npm pack: prebuilds/<plat>-x64/
+      #                   http2addon.node + runtime DLLs, load-addon.js picks by OS)
+      #   Python        : http2_client-<ver>-<plat>.whl  (3 platform wheels, self-contained)
+      #   Java          : http2-client-java-<ver>.jar    (classes only, no native)
+      #                 + http2-client-java-<ver>-<plat>.jar (classifier jars w/ native/<plat>/)
       - name: Package release assets
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"
-          echo "Packaging release assets for ${VERSION}"
+          echo "Packaging standard cross-platform release assets for ${VERSION}"
           mkdir -p dist work
+          command -v npm >/dev/null 2>&1 || echo "::warning:: npm not found; Node tgz will be a plain tarball"
+          command -v jar >/dev/null 2>&1 || echo "::warning:: jar not found; Java repack may fail"
 
+          # helper: map github os -> platform tag
+          plat_of () { case "$1" in ubuntu-latest) echo linux;; macos-latest) echo macos;; windows-latest) echo win;; *) echo "$1";; esac; }
+
+          # ── Stage per-platform bits ───────────────────────────────────────
           for os in ubuntu-latest macos-latest windows-latest; do
-            case "$os" in
-              ubuntu-latest)  plat="linux" ;;
-              macos-latest)   plat="macos" ;;
-              windows-latest) plat="win" ;;
-              *)              plat="$os" ;;
-            esac
-
+            plat="$(plat_of "$os")"
             lib="artifacts/lib-http2client-${os}"
             node="artifacts/nodejs-addon-${os}"
             py="artifacts/python-binding-${os}"
+            jar="artifacts/java-jar-${os}"
 
-            if [ ! -d "$lib" ] || [ ! -d "$node" ] || [ ! -d "$py" ]; then
+            if [ ! -d "$lib" ] || [ ! -d "$node" ] || [ ! -d "$py" ] || [ ! -d "$jar" ]; then
               echo "::error:: missing release artifact for ${os} (have: $(ls artifacts))"
               exit 1
             fi
 
-            # ---- 1. C shared library ----
-            stage="work/lib-${plat}"
-            rm -rf "$stage" && mkdir -p "$stage"
-            cp -R "$lib"/. "$stage"/            # shared lib + include/
-            tar -czf "dist/http2client-${VERSION}-${plat}.tar.gz" -C "$stage" .
-            echo "Created dist/http2client-${VERSION}-${plat}.tar.gz"
+            # C library: per-platform subdir inside the all-platform tarball.
+            mkdir -p "work/all/lib/${plat}" && cp -R "$lib"/. "work/all/lib/${plat}/"
 
-            # ---- 2. Node.js binding (platform-specific addon / DLLs) ----
-            tar -czf "dist/http2client-nodejs-${VERSION}-${plat}.tar.gz" -C "$node" .
-            echo "Created dist/http2client-nodejs-${VERSION}-${plat}.tar.gz"
+            # Node addon: collect the .node + its runtime DLLs for prebuilds/<plat>-x64/.
+            mkdir -p "work/node/prebuilds/${plat}-x64"
+            # The addon lives under nodejs/build/Release/http2addon.node (Windows: build/Release/).
+            addon="$(find "$node" -name 'http2addon.node' -print -quit)"
+            [ -n "$addon" ] || { echo "::error:: http2addon.node not found in $node"; exit 1; }
+            cp "$addon" "work/node/prebuilds/${plat}-x64/http2addon.node"
+            # Copy any side-by-side DLLs (Windows MinGW runtimes) so the addon loads.
+            addon_dir="$(dirname "$addon")"
+            for dll in "$addon_dir"/*.dll; do
+              [ -e "$dll" ] || continue
+              cp "$dll" "work/node/prebuilds/${plat}-x64/"
+            done
 
-            # ---- 3. Python binding (platform-specific .pyd / DLLs) ----
-            tar -czf "dist/http2client-python-${VERSION}-${plat}.tar.gz" -C "$py" .
-            echo "Created dist/http2client-python-${VERSION}-${plat}.tar.gz"
+            # Java: stash each platform's fat JAR for the classifier split below.
+            j="$(find "$jar" -maxdepth 1 -name '*.jar' -print -quit)"
+            [ -n "$j" ] || { echo "::error:: Java JAR not found under $jar"; exit 1; }
+            mkdir -p work/jars && cp "$j" "work/jars/java-${plat}.jar"
+            echo "Staged ${plat}"
           done
 
-          # ---- 4. Java fat JAR (cross-platform, from ubuntu build) ----
-          # Resolve the single JAR via find (avoids unquoted-glob word-splitting).
-          jar="$(find artifacts/java-jar-ubuntu-latest -maxdepth 1 -name '*.jar' -print -quit)"
-          if [ -z "$jar" ] || [ ! -f "$jar" ]; then
-            echo "::error:: Java JAR artifact not found under artifacts/java-jar-ubuntu-latest"
-            exit 1
+          # ── 1. C library: single multi-platform tarball ──────────────────
+          tar -czf "dist/http2client-${VERSION}-all.tar.gz" -C work/all/lib .
+          echo "Created dist/http2client-${VERSION}-all.tar.gz"
+
+          # ── 2. Node.js: standard npm tarball with prebuilds/ ──────────────
+          # Assemble a publishable package dir (JS + binding.gyp + prebuilds) and
+          # pack it. Consumers do `npm install ./http2-client-nodejs-<ver>.tgz`,
+          # load-addon.js picks the matching prebuild — no compilation needed.
+          node_pkg="work/node-pkg"
+          rm -rf "$node_pkg" && mkdir -p "$node_pkg"
+          cp -R artifacts/nodejs-addon-ubuntu-latest/index.js \
+                 artifacts/nodejs-addon-ubuntu-latest/load-addon.js \
+                 artifacts/nodejs-addon-ubuntu-latest/package.json \
+                 artifacts/nodejs-addon-ubuntu-latest/binding.gyp \
+                 artifacts/nodejs-addon-ubuntu-latest/index.d.ts \
+                 "$node_pkg"/ 2>/dev/null || true
+          cp -R work/node/prebuilds "$node_pkg"/prebuilds
+          if command -v npm >/dev/null 2>&1; then
+            ( cd "$node_pkg" && npm pack )
+            mv "$node_pkg"/*.tgz "dist/http2-client-nodejs-${VERSION}.tgz"
+            echo "Created dist/http2-client-nodejs-${VERSION}.tgz"
+          else
+            tar -czf "dist/http2-client-nodejs-${VERSION}.tgz" -C "$node_pkg" .
+            echo "Created dist/http2-client-nodejs-${VERSION}.tgz (plain tarball)"
           fi
-          cp "$jar" "dist/http2-client-java-${VERSION}.jar"
-          echo "Created dist/http2-client-java-${VERSION}.jar"
+
+          # ── 3. Python: three platform wheels (already built per OS) ──────
+          shopt -s nullglob
+          for w in artifacts/python-wheel-ubuntu-latest/*.whl \
+                   artifacts/python-wheel-macos-latest/*.whl \
+                   artifacts/python-wheel-windows-latest/*.whl; do
+            [ -e "$w" ] || continue
+            cp "$w" dist/
+            echo "Created dist/$(basename "$w")"
+          done
+
+          # ── 4. Java: classifier jars (standard Maven layout) ─────────────
+          # Main jar = classes only (no native); one classifier jar per platform
+          # carrying native/<plat>/{libhttp2client,libhttp2jni}.*.
+          echo "Splitting Java JAR into main + classifier jars..."
+          rm -rf work/jar-main && mkdir -p work/jar-main
+          ( cd work/jar-main && unzip -q -o "$(pwd)/work/jars/java-linux.jar" )
+          # Remove all native bits from the main jar (classes + deps only).
+          rm -rf work/jar-main/native
+          ( cd work/jar-main && jar cfm "$(pwd)/dist/http2-client-java-${VERSION}.jar" META-INF/MANIFEST.MF . )
+          echo "Created dist/http2-client-java-${VERSION}.jar (classes only)"
+
+          for plat in linux macos win; do
+            tmp="work/jar-${plat}"
+            rm -rf "$tmp" && mkdir -p "$tmp/native/${plat}"
+            ( cd "$tmp" && unzip -q -o "$(pwd)/work/jars/java-${plat}.jar" 'native/*' )
+            # Relocate native/* into native/<plat>/*
+            for f in "$tmp"/native/*; do
+              [ -e "$f" ] || continue
+              cp "$f" "$tmp/native/${plat}/"
+            done
+            rm -f "$tmp"/native/libhttp2jni.* "$tmp"/native/libhttp2client.*
+            # Build a standalone classifier jar carrying only this platform's native.
+            ( cd "$tmp" && jar cf "$(pwd)/dist/http2-client-java-${VERSION}-${plat}.jar" "native/${plat}" )
+            echo "Created dist/http2-client-java-${VERSION}-${plat}.jar"
+          done
 
       - name: Generate checksums
         shell: bash
@@ -644,6 +755,8 @@ jobs:
           generate_release_notes: true
           files: |
             dist/*.tar.gz
+            dist/*.tgz
+            dist/*.whl
             dist/*.jar
             dist/checksums-${{ github.ref_name }}.sha256
         env:

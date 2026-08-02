@@ -68,6 +68,11 @@ def _find_library():
     if os.path.exists(candidate):
         return candidate
 
+    # 3) inside the package's bundled lib/ directory (wheel install)
+    candidate = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", lib_name)
+    if os.path.exists(candidate):
+        return candidate
+
     raise FileNotFoundError(
         f"Cannot find {lib_name}. Please build the project first:\n"
         f"  cd {project_root} && mkdir -p build && cd build && cmake .. && make"

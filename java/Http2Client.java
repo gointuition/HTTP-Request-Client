@@ -56,10 +56,26 @@ public class Http2Client {
     }
 
     /**
+     * Map the current OS to the platform sub-directory baked into the
+     * cross-platform fat JAR: linux | macos | win.
+     */
+    private static String platformDir() {
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("linux")) {
+            return "linux";
+        } else if (os.contains("mac") || os.contains("darwin")) {
+            return "macos";
+        } else if (os.contains("windows") || os.contains("win")) {
+            return "win";
+        }
+        throw new UnsatisfiedLinkError("Unsupported OS for native loading: " + os);
+    }
+
+    /**
      * Locate and load a native library by base name (e.g. "libhttp2jni").
      *
      * Search order:
-     *   1. JAR resource:  /native/<baseName><ext>  (packaged fat JAR)
+     *   1. JAR resource:  /native/<plat>/<baseName><ext>  (cross-platform fat JAR)
      *   2. Filesystem:    build/, ../, ../../lib/shared/  (development)
      *   3. Fallback:      System.loadLibrary()
      */
@@ -73,9 +89,15 @@ public class Http2Client {
 
         String fileName = baseName + ext;
 
-        // 1) Try loading from JAR resource (packaged mode)
-        String resourcePath = "/native/" + fileName;
+        // 1) Try loading from JAR resource (packaged mode).
+        //    Cross-platform JARs nest natives under /native/<plat>/; single-platform
+        //    (or locally-built) JARs keep them directly under /native/. Try both.
+        String resourcePath = "/native/" + platformDir() + "/" + fileName;
         URL resourceUrl = Http2Client.class.getResource(resourcePath);
+        if (resourceUrl == null) {
+            resourcePath = "/native/" + fileName;
+            resourceUrl = Http2Client.class.getResource(resourcePath);
+        }
         if (resourceUrl != null) {
             try {
                 File tempFile = extractToTemp(resourcePath, fileName);

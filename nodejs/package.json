@@ -19,6 +19,18 @@
   ],
   "author": "Intuition",
   "license": "Apache-2.0",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "load-addon.js",
+    "binding.gyp",
+    "prebuilds/**"
+  ],
+  "optionalDependencies": {
+    "@http2/client-linux-x64": "1.0.0",
+    "@http2/client-macos-x64": "1.0.0",
+    "@http2/client-win32-x64": "1.0.0"
+  },
   "devDependencies": {
     "node-gyp": "^11.0.0"
   },
