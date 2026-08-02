@@ -141,7 +141,7 @@ Installs as `http2client` package. Requires `libhttp2client.dylib` (or `.so` on 
 
 ## Using the Release Artifacts
 
-Each [GitHub Release](https://github.com/your-org/Http2/releases) ships per-platform wheels that bundle `libhttp2client` inside the package, so `pip install` needs no compiler. A source sdist (`http2_client-<ver>.tar.gz`) is also published for platforms without a prebuilt wheel (you build `libhttp2client` locally before installing).
+Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships per-platform wheels that bundle `libhttp2client` inside the package, so `pip install` needs no compiler. A source sdist (`http2_client-<ver>.tar.gz`) is also published for platforms without a prebuilt wheel (you build `libhttp2client` locally before installing).
 
 | Platform | File |
 | --- | --- |

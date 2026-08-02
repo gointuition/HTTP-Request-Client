@@ -334,7 +334,7 @@ cmake --build build
 
 ## Using the Release Artifacts
 
-Every [GitHub Release](https://github.com/your-org/Http2/releases) ships prebuilt binaries so you do **not** need to compile the C library (BoringSSL, etc.) yourself. Each binding is published following its language's **standard package-manager layout**, so you install/use it the way you would any other package.
+Every [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships prebuilt binaries so you do **not** need to compile the C library (BoringSSL, etc.) yourself. Each binding is published following its language's **standard package-manager layout**, so you install/use it the way you would any other package.
 
 | Component | Release artifact(s) | Standard form |
 |-----------|--------------------|---------------|

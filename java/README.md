@@ -191,7 +191,7 @@ At runtime `Http2Client.java` automatically extracts the native libraries from
 
 ## Using the Release Artifacts
 
-Each [GitHub Release](https://github.com/your-org/Http2/releases) ships the binding in **Maven classifier layout** instead of a single fat JAR:
+Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships the binding in **Maven classifier layout** instead of a single fat JAR:
 
 - `http2-client-java-<ver>.jar` — **bytecode only** (no native libraries)
 - `http2-client-java-<ver>-<plat>.jar` (×3: `linux` / `macos` / `win`) — per-platform native libraries under `native/<plat>/`

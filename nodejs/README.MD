@@ -317,7 +317,7 @@ or `dns.lookup` work.
 
 ## Using the Release Artifacts
 
-Each [GitHub Release](https://github.com/your-org/Http2/releases) ships a standard npm package `http2-client-nodejs-<ver>.tgz` with prebuilt addons under `prebuilds/<plat>-x64/http2addon.node`. Install it directly from the asset (no registry needed):
+Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships a standard npm package `http2-client-nodejs-<ver>.tgz` with prebuilt addons under `prebuilds/<plat>-x64/http2addon.node`. Install it directly from the asset (no registry needed):
 
 ```bash
 npm install ./http2-client-nodejs-1.0.0.tgz
