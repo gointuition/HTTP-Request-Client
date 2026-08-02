@@ -619,6 +619,12 @@ jobs:
           merge-multiple: false
           path: artifacts
 
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       # Release layout — each component follows its language's package-manager
       # standard, published to GitHub Release as the distribution artifact:
       #   C library     : http2client-<ver>-all.tar.gz   (linux/ macos/ win/ subdirs)
@@ -717,16 +723,16 @@ jobs:
           # carrying native/<plat>/{libhttp2client,libhttp2jni}.*.
           echo "Splitting Java JAR into main + classifier jars..."
           rm -rf work/jar-main && mkdir -p work/jar-main
-          ( cd work/jar-main && unzip -q -o "$(pwd)/work/jars/java-linux.jar" )
+          unzip -q -o "work/jars/java-linux.jar" -d work/jar-main
           # Remove all native bits from the main jar (classes + deps only).
           rm -rf work/jar-main/native
-          ( cd work/jar-main && jar cfm "$(pwd)/dist/http2-client-java-${VERSION}.jar" META-INF/MANIFEST.MF . )
+          jar cfm "dist/http2-client-java-${VERSION}.jar" -C work/jar-main META-INF/MANIFEST.MF .
           echo "Created dist/http2-client-java-${VERSION}.jar (classes only)"
 
           for plat in linux macos win; do
             tmp="work/jar-${plat}"
             rm -rf "$tmp" && mkdir -p "$tmp/native/${plat}"
-            ( cd "$tmp" && unzip -q -o "$(pwd)/work/jars/java-${plat}.jar" 'native/*' )
+            unzip -q -o "work/jars/java-${plat}.jar" -d "$tmp" 'native/*'
             # Relocate native/* into native/<plat>/*
             for f in "$tmp"/native/*; do
               [ -e "$f" ] || continue
@@ -734,7 +740,7 @@ jobs:
             done
             rm -f "$tmp"/native/libhttp2jni.* "$tmp"/native/libhttp2client.*
             # Build a standalone classifier jar carrying only this platform's native.
-            ( cd "$tmp" && jar cf "$(pwd)/dist/http2-client-java-${VERSION}-${plat}.jar" "native/${plat}" )
+            jar cf "dist/http2-client-java-${VERSION}-${plat}.jar" -C "$tmp" "native/${plat}"
             echo "Created dist/http2-client-java-${VERSION}-${plat}.jar"
           done
 
