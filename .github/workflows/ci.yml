@@ -753,19 +753,30 @@ jobs:
 
           for plat in linux macos win; do
             tmp="work/jar-${plat}"
-            rm -rf "$tmp" && mkdir -p "$tmp"
-            # Extract the native/ subtree. The fat jar stores native/<plat>/...,
-            # which matches the runtime layout loadNativeLibrary() expects.
+            rm -rf "$tmp" && mkdir -p "$tmp/native/${plat}"
+            # Per-platform fat jar stores natives directly under native/ (no
+            # <plat> subdir). Relocate them into native/<plat>/ so the
+            # classifier jar matches the runtime layout loadNativeLibrary() expects.
             unzip -q -o "work/jars/java-${plat}.jar" -d "$tmp" 'native/*'
-            if [ ! -d "$tmp/native/${plat}" ]; then
-              echo "::error:: expected native/${plat}/ in java-${plat}.jar but not found"
+            found=0
+            for f in "$tmp"/native/*; do
+              [ -f "$f" ] || continue
+              cp "$f" "$tmp/native/${plat}/"
+              found=1
+            done
+            # Remove the original (non-<plat>) native files so the classifier jar
+            # only carries native/<plat>/. Keep the native/<plat>/ dir we just filled.
+            for f in "$tmp"/native/*; do
+              [ -e "$f" ] || continue
+              bd="$(basename "$f")"
+              if [ "$bd" != "${plat}" ]; then
+                rm -rf "$f"
+              fi
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "::error:: no native libraries found in java-${plat}.jar"
               exit 1
             fi
-            # Keep only native/<plat>/; remove any other native/ subdirs or files.
-            for d in "$tmp"/native/*/; do
-              [ "$(basename "$d")" = "${plat}" ] || rm -rf "$d"
-            done
-            rm -f "$tmp"/native/libhttp2jni.* "$tmp"/native/libhttp2client.*
             # Build a standalone classifier jar carrying only this platform's native.
             jar cf "dist/http2-client-java-${VERSION}-${plat}.jar" -C "$tmp" "native/${plat}"
             echo "Created dist/http2-client-java-${VERSION}-${plat}.jar"
