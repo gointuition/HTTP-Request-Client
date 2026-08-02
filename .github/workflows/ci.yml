@@ -37,8 +37,27 @@ jobs:
           path: third_party
           key: third-party-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
+      # ccache caches compiler outputs by hashing inputs, so re-running the
+      # pipeline (or bumping a dependency) skips recompiling unchanged .o files
+      # — including the heavy third-party libraries (BoringSSL, etc.).
+      - name: Configure ccache
+        uses: hendrikmuhs/ccache-action@v2
+        with:
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+          max-size: 1G
+
+      - name: Cache build directory
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            build-${{ runner.os }}-
+
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build --parallel 4
@@ -189,6 +208,7 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-ccache
             mingw-w64-x86_64-python-pip
             mingw-w64-x86_64-tools-git
             unzip
@@ -200,11 +220,26 @@ jobs:
           path: third_party
           key: third-party-Windows-${{ hashFiles('CMakeLists.txt') }}
 
+      # ccache caches compiler outputs by input hash, skipping recompilation of
+      # unchanged objects (incl. the heavy third-party libraries). Persist the
+      # cache across runs via actions/cache.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-Windows-${{ github.sha }}
+          restore-keys: |
+            ccache-Windows-
+
       - name: Configure
-        run: cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
+        run: |
+          export CCACHE_DIR="${{ github.workspace }}/.ccache"
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel $(nproc)
+        run: |
+          export CCACHE_DIR="${{ github.workspace }}/.ccache"
+          cmake --build build --parallel $(nproc)
 
       - name: Smoke test — GET
         working-directory: bin
