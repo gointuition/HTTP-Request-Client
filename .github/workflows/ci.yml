@@ -629,8 +629,8 @@ jobs:
       # Release layout — each component follows its language's package-manager
       # standard, published to GitHub Release as the distribution artifact:
       #   C library     : http2client-<ver>-all.tar.gz   (linux/ macos/ win/ subdirs)
-      #   Node.js       : http2-client-nodejs-<ver>.tgz  (npm pack: prebuilds/<plat>-x64/
-      #                   http2addon.node + runtime DLLs, load-addon.js picks by OS)
+  #   Node.js       : http2-client-nodejs-<ver>.tgz  (npm pack: prebuilds/<plat>-<arch>/
+  #                   http2addon.node + runtime DLLs, load-addon.js picks by OS+arch)
       #   Python        : http2_client-<ver>-<plat>.whl  (3 platform wheels, self-contained)
   #   Java          : http2-client-java-<ver>.jar    (single cross-platform fat
   #                   JAR: classes + native/linux|macos|win — works on any OS)
@@ -663,17 +663,23 @@ jobs:
             # C library: per-platform subdir inside the all-platform tarball.
             mkdir -p "work/all/lib/${plat}" && cp -R "$lib"/. "work/all/lib/${plat}/"
 
-            # Node addon: collect the .node + its runtime DLLs for prebuilds/<plat>-x64/.
-            mkdir -p "work/node/prebuilds/${plat}-x64"
+            # Node addon: collect the .node + its runtime DLLs for
+            # prebuilds/<plat>-<arch>/, where <arch> matches the CI runner's
+            # real architecture (NOT this ubuntu release host). macos-latest is
+            # arm64 (-> darwin-arm64), ubuntu/windows are x64. load-addon.js maps
+            # process.platform-arch to this triplet at runtime.
+            case "$plat" in macos) arch=arm64;; *) arch=x64;; esac
+            pb_dir="work/node/prebuilds/${plat}-${arch}"
+            mkdir -p "$pb_dir"
             # The addon lives under nodejs/build/Release/http2addon.node (Windows: build/Release/).
             addon="$(find "$node" -name 'http2addon.node' -print -quit)"
             [ -n "$addon" ] || { echo "::error:: http2addon.node not found in $node"; exit 1; }
-            cp "$addon" "work/node/prebuilds/${plat}-x64/http2addon.node"
+            cp "$addon" "$pb_dir/http2addon.node"
             # Copy any side-by-side DLLs (Windows MinGW runtimes) so the addon loads.
             addon_dir="$(dirname "$addon")"
             for dll in "$addon_dir"/*.dll; do
               [ -e "$dll" ] || continue
-              cp "$dll" "work/node/prebuilds/${plat}-x64/"
+              cp "$dll" "$pb_dir/"
             done
 
             # Java: stash each platform's fat JAR for the classifier split below.
@@ -795,4 +801,28 @@ jobs:
             dist/checksums-${{ github.ref_name }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Publish to npm registry ───────────────────────────────────────────
+      # The Node tgz already bundles prebuilds for all platforms (incl. darwin-arm64
+      # via the macos-latest arm64 runner), so `npm publish` yields one package that
+      # installs without compiling on every supported OS/arch. Runs only on tag push
+      # and when NPM_TOKEN is configured; otherwise skipped silently.
+      - name: Publish Node.js package to npm
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && env.NPM_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v npm >/dev/null 2>&1 || { echo "::warning:: npm not found; skipping npm publish"; exit 0; }
+          # Re-pack from the already-assembled node package dir so the published
+          # tarball contains exactly the prebuilds we staged above.
+          node_pkg="work/node-pkg"
+          if [ ! -d "$node_pkg/prebuilds" ]; then
+            echo "::error:: node prebuilds not staged; cannot publish"
+            exit 1
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$HOME/.npmrc"
+          ( cd "$node_pkg" && npm publish --access public --ignore-scripts )
+          echo "Published @gointuition/http-client to npm registry"
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 

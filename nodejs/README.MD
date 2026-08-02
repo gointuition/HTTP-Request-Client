@@ -1,4 +1,4 @@
-# @http2/client
+# @gointuition/http-client
 
 High-performance HTTP/2 client with native C implementation using N-API.
 
@@ -327,7 +327,7 @@ or `dns.lookup` work.
 Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships a standard npm package `http2-client-nodejs-<ver>.tgz` with prebuilt addons under `prebuilds/<plat>-x64/http2addon.node`. Install it directly from the asset (no registry needed):
 
 ```bash
-npm install ./http2-client-nodejs-1.0.0.tgz
+npm install ./http2-client-nodejs-1.0.1.tgz
 ```
 
 `load-addon.js` selects the matching `prebuilds/<plat>-x64/http2addon.node` automatically — **no compilation**. The addon still needs `libhttp2client` next to it (or on the loader path), so also install the C library from the `http2client-<ver>-all.tar.gz` release asset.
@@ -349,7 +349,7 @@ npm run build
 Type definitions are included (`index.d.ts`):
 
 ```typescript
-import httpClient, { HttpRequestConfig, HttpResult } from '@http2/client';
+import httpClient, { HttpRequestConfig, HttpResult } from '@gointuition/http-client';
 
 const config: HttpRequestConfig = {
     method: "GET",

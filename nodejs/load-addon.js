@@ -10,9 +10,11 @@
 //   2. A locally compiled addon at build/Release/http2addon.node (source build).
 //
 // Supported triplet suffixes match the artifacts published by CI:
-//   linux-x64   (libhttp2client.so)
-//   darwin-x64  (libhttp2client.dylib)
-//   win32-x64   (libhttp2client.dll + MinGW runtimes)
+//   linux-x64    (libhttp2client.so)
+//   linux-arm64  (libhttp2client.so)
+//   darwin-x64   (libhttp2client.dylib)
+//   darwin-arm64 (libhttp2client.dylib, Apple Silicon)
+//   win32-x64    (libhttp2client.dll + MinGW runtimes)
 
 const fs = require('fs')
 const path = require('path')
@@ -22,7 +24,9 @@ function detectTriplet () {
   const arch = process.arch // x64 | arm64 | ...
   const map = {
     'linux-x64': 'linux-x64',
+    'linux-arm64': 'linux-arm64',
     'darwin-x64': 'darwin-x64',
+    'darwin-arm64': 'darwin-arm64',
     'win32-x64': 'win32-x64'
   }
   return map[`${plat}-${arch}`] || null
