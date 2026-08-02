@@ -638,7 +638,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
+          # Strip a leading "v" from the tag so artifact names and the npm version
+          # share the same bare semver (v1.0.2 -> 1.0.2).
+          VERSION="${GITHUB_REF_NAME#v}"
           echo "Packaging standard cross-platform release assets for ${VERSION}"
           mkdir -p dist work
           command -v npm >/dev/null 2>&1 || echo "::warning:: npm not found; Node tgz will be a plain tarball"
@@ -707,9 +709,19 @@ jobs:
                  "$node_pkg"/ 2>/dev/null || true
           cp -R work/node/prebuilds "$node_pkg"/prebuilds
           # npm only renders a lowercase README.md on the registry page; the repo
-          # file is README.MD, so copy it in under the name npm expects.
-          if [ -f "nodejs/README.MD" ]; then
-            cp "nodejs/README.MD" "$node_pkg/README.md"
+          # file is now README.md, so copy it in verbatim.
+          if [ -f "nodejs/README.md" ]; then
+            cp "nodejs/README.md" "$node_pkg/README.md"
+          fi
+          # Pin the published version to the git tag so package.json never has to
+          # be bumped by hand. GITHUB_REF_NAME is "v1.2.3" on tag pushes; strip the
+          # leading "v" for the npm semver. For non-tag runs keep VERSION as-is.
+          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+            PKG_VER="${GITHUB_REF_NAME#v}"
+            echo "Setting published npm version to ${PKG_VER} (from tag ${GITHUB_REF_NAME})"
+            ( cd "$node_pkg" && npm pkg set version="$PKG_VER" )
+          else
+            echo "Not a tag push (GITHUB_REF_NAME=$GITHUB_REF_NAME); keeping version ${VERSION}"
           fi
           if command -v npm >/dev/null 2>&1; then
             ( cd "$node_pkg" && npm pack )
