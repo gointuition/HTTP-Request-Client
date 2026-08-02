@@ -40,13 +40,25 @@ jobs:
       # ccache caches compiler outputs by hashing inputs, so re-running the
       # pipeline (or bumping a dependency) skips recompiling unchanged .o files
       # — including the heavy third-party libraries (BoringSSL, etc.).
-      - name: Configure ccache
-        uses: hendrikmuhs/ccache-action@v2
+      # Installed manually (no third-party action dependency) and cached via
+      # actions/cache.
+      - name: Install ccache
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            brew install ccache
+          else
+            sudo apt-get update && sudo apt-get install -y ccache
+          fi
+          ccache --version
+          ccache --zero-stats || true
+
+      - name: Cache ccache
+        uses: actions/cache@v4
         with:
+          path: ~/.ccache
           key: ccache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             ccache-${{ runner.os }}-
-          max-size: 1G
 
       - name: Cache build directory
         uses: actions/cache@v4
@@ -57,9 +69,13 @@ jobs:
             build-${{ runner.os }}-
 
       - name: Configure
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: cmake --build build --parallel 4
 
       # Test executables validate basket JSON internally via jansson and exit
