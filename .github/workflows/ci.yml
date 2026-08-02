@@ -235,7 +235,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "${{ github.workspace }}/python"
-          python3 -m pip install --quiet --break-system-packages build cffi 2>/dev/null || python3 -m pip install --quiet build cffi
+          python3 -m pip install --quiet --break-system-packages build cffi wheel 2>/dev/null || python3 -m pip install --quiet build cffi wheel
           LIB_NAME="libhttp2client.so"
           PLAT_NAME="manylinux_2_17_x86_64"
           case "$(uname)" in Darwin) LIB_NAME="libhttp2client.dylib"; PLAT_NAME="macosx_11_0_x86_64" ;; esac
@@ -578,7 +578,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           cd "${{ github.workspace }}\python"
-          python -m pip install --quiet build cffi
+          python -m pip install --quiet build cffi wheel
           New-Item -ItemType Directory -Force lib | Out-Null
           Copy-Item "${{ github.workspace }}\lib\shared\libhttp2client.dll" "lib\libhttp2client.dll"
           python setup.py bdist_wheel --plat-name=win_amd64 --dist-dir dist
