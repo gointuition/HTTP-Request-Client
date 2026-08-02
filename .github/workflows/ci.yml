@@ -56,16 +56,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
+          # Keyed on the third-party pins (CMakeLists.txt) so a commit that does
+          # NOT touch them reuses the cached compiler outputs — including the
+          # patched BoringSSL tree, whose source hashes are stable across such
+          # commits and therefore ccache-friendly.
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
           restore-keys: |
+            ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}-
             ccache-${{ runner.os }}-
 
       - name: Cache build directory
         uses: actions/cache@v4
         with:
           path: build
-          key: build-${{ runner.os }}-${{ github.sha }}
+          # Same pin-based key as ccache: when third-party pins are unchanged the
+          # entire build/ tree (incl. third-party .a files) is restored and Ninja
+          # skips recompiling BoringSSL/brotli/zstd/etc. entirely.
+          key: build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
           restore-keys: |
+            build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}-
             build-${{ runner.os }}-
 
       - name: Configure
@@ -249,9 +258,26 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: ccache-Windows-${{ github.sha }}
+          # Keyed on the third-party pins so an unchanged CMakeLists.txt reuses
+          # the cached compiler outputs (incl. the patched BoringSSL tree).
+          key: ccache-Windows-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
           restore-keys: |
+            ccache-Windows-${{ hashFiles('CMakeLists.txt') }}-
             ccache-Windows-
+
+      # CRITICAL: without caching build/, the restored third_party sources have no
+      # matching object/library files, so Ninja recompiles BoringSSL (and every
+      # other third party) from scratch every run. Caching build/ keyed on the
+      # same pins lets Ninja treat the tree as up-to-date and skip third-party
+      # compilation entirely when the pins are unchanged.
+      - name: Cache build directory
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: build-Windows-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            build-Windows-${{ hashFiles('CMakeLists.txt') }}-
+            build-Windows-
 
       - name: Configure
         run: |
