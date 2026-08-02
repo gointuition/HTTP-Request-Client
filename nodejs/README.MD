@@ -315,6 +315,22 @@ reliable approach. Size the pool to your target concurrency (`UV_THREADPOOL_SIZE
 and DNS operations, so leave a little headroom if the app also does heavy disk
 or `dns.lookup` work.
 
+## Using the Release Artifacts
+
+Each [GitHub Release](https://github.com/your-org/Http2/releases) ships a standard npm package `http2-client-nodejs-<ver>.tgz` with prebuilt addons under `prebuilds/<plat>-x64/http2addon.node`. Install it directly from the asset (no registry needed):
+
+```bash
+npm install ./http2-client-nodejs-1.0.0.tgz
+```
+
+`load-addon.js` selects the matching `prebuilds/<plat>-x64/http2addon.node` automatically — **no compilation**. The addon still needs `libhttp2client` next to it (or on the loader path), so also install the C library from the `http2client-<ver>-all.tar.gz` release asset.
+
+The native request is synchronous/blocking; `requestAsync` runs calls on libuv worker threads (default pool size 4). Raise the pool for real concurrency:
+
+```bash
+UV_THREADPOOL_SIZE=8 node your-app.js
+```
+
 ## Building from Source
 
 ```bash

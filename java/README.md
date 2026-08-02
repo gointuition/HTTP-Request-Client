@@ -189,6 +189,50 @@ At runtime `Http2Client.java` automatically extracts the native libraries from
 > Ensure `C:\msys64\mingw64\bin` is on your system PATH, or copy those DLLs
 > next to the extracted files.
 
+## Using the Release Artifacts
+
+Each [GitHub Release](https://github.com/your-org/Http2/releases) ships the binding in **Maven classifier layout** instead of a single fat JAR:
+
+- `http2-client-java-<ver>.jar` — **bytecode only** (no native libraries)
+- `http2-client-java-<ver>-<plat>.jar` (×3: `linux` / `macos` / `win`) — per-platform native libraries under `native/<plat>/`
+
+Put **both** the main jar and your platform's classifier jar on the classpath:
+
+```bash
+# Linux example (macOS: -macos.jar, Windows: -win.jar)
+# JDK >= 16 needs --enable-native-access; JDK < 16 must omit it
+java --enable-native-access=ALL-UNNAMED \
+  -cp "http2-client-java-1.0.0.jar:http2-client-java-1.0.0-linux.jar" Test
+java --enable-native-access=ALL-UNNAMED \
+  -cp "http2-client-java-1.0.0.jar:http2-client-java-1.0.0-linux.jar" Example
+```
+
+In Maven you would declare:
+
+```xml
+<dependency>
+  <groupId>com.example</groupId>
+  <artifactId>http2-client-java</artifactId>
+  <version>1.0.0</version>
+</dependency>
+<dependency>
+  <groupId>com.example</groupId>
+  <artifactId>http2-client-java</artifactId>
+  <version>1.0.0</version>
+  <classifier>linux</classifier> <!-- macos / win -->
+</dependency>
+```
+
+Embed it as a normal dependency (`Http2Client` lives in the unnamed module, call directly without import):
+
+```java
+Http2Client.init();
+String result = Http2Client.request(requestJsonString);
+Http2Client.cleanup();
+```
+
+> **Windows note:** the JNI bridge depends on MinGW runtime DLLs (`libwinpthread-1.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll`). Ensure `C:\msys64\mingw64\bin` is on `PATH`, or copy those DLLs next to the JAR.
+
 ## Build artifacts
 
 ```
