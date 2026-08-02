@@ -191,35 +191,32 @@ At runtime `Http2Client.java` automatically extracts the native libraries from
 
 ## Using the Release Artifacts
 
-Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships the binding in **Maven classifier layout** instead of a single fat JAR:
+Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships the binding as a **single, cross-platform fat JAR**:
 
-- `http2-client-java-<ver>.jar` — **bytecode only** (no native libraries)
-- `http2-client-java-<ver>-<plat>.jar` (×3: `linux` / `macos` / `win`) — per-platform native libraries under `native/<plat>/`
+- `http2-client-java-<ver>.jar` — Java bytecode **plus** all three platforms'
+  native libraries laid out as `native/linux/`, `native/macos/`, `native/win/`
 
-Put **both** the main jar and your platform's classifier jar on the classpath:
+At runtime `Http2Client.loadNativeLibrary()` selects the matching `native/<plat>/`
+sub-directory from `os.name`, so **one artifact runs unchanged on Linux, macOS, and
+Windows** — no classifier, no per-platform dependency.
+
+Put the single JAR on the classpath:
 
 ```bash
-# Linux example (macOS: -macos.jar, Windows: -win.jar)
 # JDK >= 16 needs --enable-native-access; JDK < 16 must omit it
 java --enable-native-access=ALL-UNNAMED \
-  -cp "http2-client-java-1.0.0.jar:http2-client-java-1.0.0-linux.jar" Test
+  -cp "http2-client-java-1.0.0.jar" Test
 java --enable-native-access=ALL-UNNAMED \
-  -cp "http2-client-java-1.0.0.jar:http2-client-java-1.0.0-linux.jar" Example
+  -cp "http2-client-java-1.0.0.jar" Example
 ```
 
-In Maven you would declare:
+In Maven you declare just one dependency, regardless of deployment OS:
 
 ```xml
 <dependency>
   <groupId>com.example</groupId>
   <artifactId>http2-client-java</artifactId>
   <version>1.0.0</version>
-</dependency>
-<dependency>
-  <groupId>com.example</groupId>
-  <artifactId>http2-client-java</artifactId>
-  <version>1.0.0</version>
-  <classifier>linux</classifier> <!-- macos / win -->
 </dependency>
 ```
 

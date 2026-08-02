@@ -341,7 +341,7 @@ Every [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releas
 | C library | `http2client-<ver>-all.tar.gz` | tarball with `linux/` `macos/` `win/` subdirs (lib + `include/`) |
 | Node.js | `http2-client-nodejs-<ver>.tgz` | npm package with `prebuilds/<plat>-x64/http2addon.node` |
 | Python | `http2_client-<ver>-<plat>.whl` (×3) | platform wheels, self-contained native lib inside |
-| Java | `http2-client-java-<ver>.jar` + `http2-client-java-<ver>-<plat>.jar` (×3) | Maven classifier layout (classes jar + per-platform native jars) |
+| Java | `http2-client-java-<ver>.jar` | single cross-platform fat JAR (classes + `native/linux\|macos\|win`) |
 
 `<plat>` is `linux` / `macos` / `win`. A `checksums-<ver>.sha256` file is published alongside — verify before use:
 

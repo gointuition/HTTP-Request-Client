@@ -632,8 +632,8 @@ jobs:
       #   Node.js       : http2-client-nodejs-<ver>.tgz  (npm pack: prebuilds/<plat>-x64/
       #                   http2addon.node + runtime DLLs, load-addon.js picks by OS)
       #   Python        : http2_client-<ver>-<plat>.whl  (3 platform wheels, self-contained)
-      #   Java          : http2-client-java-<ver>.jar    (classes only, no native)
-      #                 + http2-client-java-<ver>-<plat>.jar (classifier jars w/ native/<plat>/)
+  #   Java          : http2-client-java-<ver>.jar    (single cross-platform fat
+  #                   JAR: classes + native/linux|macos|win — works on any OS)
       - name: Package release assets
         shell: bash
         run: |
@@ -740,47 +740,37 @@ jobs:
             echo "::warning:: python3 unavailable; skipping Python sdist (wheels still published)"
           fi
 
-          # ── 4. Java: classifier jars (standard Maven layout) ─────────────
-          # Main jar = classes only (no native); one classifier jar per platform
-          # carrying native/<plat>/{libhttp2client,libhttp2jni}.*.
-          echo "Splitting Java JAR into main + classifier jars..."
-          rm -rf work/jar-main && mkdir -p work/jar-main
-          unzip -q -o "work/jars/java-linux.jar" -d work/jar-main
-          # Remove all native bits from the main jar (classes + deps only).
-          rm -rf work/jar-main/native
-          jar cfm "dist/http2-client-java-${VERSION}.jar" work/jar-main/META-INF/MANIFEST.MF -C work/jar-main .
-          echo "Created dist/http2-client-java-${VERSION}.jar (classes only)"
-
+          # ── 4. Java: single cross-platform fat JAR ──────────────────────
+          # Merge the classes from one platform's fat JAR with the NATIVE
+          # libraries of ALL three platforms. Each platform stores its natives
+          # directly under native/ (no <plat> subdir), so we relocate them into
+          # native/<plat>/ before repacking. At runtime loadNativeLibrary() picks
+          # the matching native/<plat>/ sub-directory via platformDir(), so a
+          # single JAR works unchanged on linux / macos / win.
+          echo "Merging all platforms' native libs into one fat JAR..."
+          rm -rf work/jar-all && mkdir -p work/jar-all
+          # Base classes/deps from any platform (they are identical bytecode).
+          unzip -q -o "work/jars/java-linux.jar" -d work/jar-all
+          # Lay down each platform's natives under native/<plat>/.
           for plat in linux macos win; do
             tmp="work/jar-${plat}"
-            rm -rf "$tmp" && mkdir -p "$tmp/native/${plat}"
-            # Per-platform fat jar stores natives directly under native/ (no
-            # <plat> subdir). Relocate them into native/<plat>/ so the
-            # classifier jar matches the runtime layout loadNativeLibrary() expects.
+            rm -rf "$tmp" && mkdir -p "$tmp/native"
             unzip -q -o "work/jars/java-${plat}.jar" -d "$tmp" 'native/*'
             found=0
             for f in "$tmp"/native/*; do
               [ -f "$f" ] || continue
-              cp "$f" "$tmp/native/${plat}/"
+              mkdir -p "work/jar-all/native/${plat}"
+              cp "$f" "work/jar-all/native/${plat}/"
               found=1
-            done
-            # Remove the original (non-<plat>) native files so the classifier jar
-            # only carries native/<plat>/. Keep the native/<plat>/ dir we just filled.
-            for f in "$tmp"/native/*; do
-              [ -e "$f" ] || continue
-              bd="$(basename "$f")"
-              if [ "$bd" != "${plat}" ]; then
-                rm -rf "$f"
-              fi
             done
             if [ "$found" -eq 0 ]; then
               echo "::error:: no native libraries found in java-${plat}.jar"
               exit 1
             fi
-            # Build a standalone classifier jar carrying only this platform's native.
-            jar cf "dist/http2-client-java-${VERSION}-${plat}.jar" -C "$tmp" "native/${plat}"
-            echo "Created dist/http2-client-java-${VERSION}-${plat}.jar"
           done
+          jar cfm "dist/http2-client-java-${VERSION}.jar" \
+            work/jar-all/META-INF/MANIFEST.MF -C work/jar-all .
+          echo "Created dist/http2-client-java-${VERSION}.jar (cross-platform: native/linux|macos|win)"
 
       - name: Generate checksums
         shell: bash
