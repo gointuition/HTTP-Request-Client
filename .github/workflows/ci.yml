@@ -753,14 +753,14 @@ jobs:
 
           for plat in linux macos win; do
             tmp="work/jar-${plat}"
-            rm -rf "$tmp" && mkdir -p "$tmp/native/${plat}"
-            unzip -q -o "work/jars/java-${plat}.jar" -d "$tmp" 'native/*'
-            # Relocate native/* into native/<plat>/*
-            for f in "$tmp"/native/*; do
-              [ -e "$f" ] || continue
-              cp "$f" "$tmp/native/${plat}/"
-            done
-            rm -f "$tmp"/native/libhttp2jni.* "$tmp"/native/libhttp2client.*
+            rm -rf "$tmp" && mkdir -p "$tmp"
+            # The per-platform fat jar already nests natives at native/<plat>/...,
+            # which matches the layout loadNativeLibrary() expects at runtime.
+            unzip -q -o "work/jars/java-${plat}.jar" -d "$tmp" "native/${plat}/*"
+            if [ ! -d "$tmp/native/${plat}" ]; then
+              echo "::error:: expected native/${plat}/ in java-${plat}.jar but not found"
+              exit 1
+            fi
             # Build a standalone classifier jar carrying only this platform's native.
             jar cf "dist/http2-client-java-${VERSION}-${plat}.jar" -C "$tmp" "native/${plat}"
             echo "Created dist/http2-client-java-${VERSION}-${plat}.jar"
