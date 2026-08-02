@@ -30,7 +30,6 @@
     "index.js",
     "index.d.ts",
     "load-addon.js",
-    "binding.gyp",
     "README.md",
     "prebuilds/**"
   ],
