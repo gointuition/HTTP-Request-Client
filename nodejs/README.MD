@@ -15,10 +15,17 @@ This produces `lib/shared/libhttp2client.{dylib,so,dll}`.
 
 ### 2. Install the addon
 
+For **development from source** (builds the native addon locally via node-gyp):
+
 ```bash
 cd nodejs
-npm install   # automatically runs build-addon.js
+npm install        # installs devDependencies
+npm run build      # compiles http2addon.node from source
 ```
+
+For **consuming the published package**, no compilation is needed — the npm
+tarball ships prebuilt addons under `prebuilds/<plat>-x64/` and `load-addon.js`
+picks the right one automatically (see "Using the Release Artifacts" below).
 
 ### Windows (MSVC + MinGW dual-toolchain)
 
