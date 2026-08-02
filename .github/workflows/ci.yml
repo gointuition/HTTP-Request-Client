@@ -708,11 +708,16 @@ jobs:
                  artifacts/nodejs-addon-ubuntu-latest/index.d.ts \
                  "$node_pkg"/ 2>/dev/null || true
           cp -R work/node/prebuilds "$node_pkg"/prebuilds
-          # npm only renders a lowercase README.md on the registry page; the repo
-          # file is now README.md, so copy it in verbatim.
-          if [ -f "nodejs/README.md" ]; then
-            cp "nodejs/README.md" "$node_pkg/README.md"
-          fi
+          # npm only renders a lowercase README.md on the registry page. The
+          # nodejs-addon-* artifact carries the repo's README (renamed to lowercase
+          # in the repo), so copy it from there into the publishable package dir.
+          for src in artifacts/nodejs-addon-ubuntu-latest/README.md \
+                     artifacts/nodejs-addon-ubuntu-latest/README.MD; do
+            if [ -f "$src" ]; then
+              cp "$src" "$node_pkg/README.md"
+              break
+            fi
+          done
           # Pin the published version to the git tag so package.json never has to
           # be bumped by hand. GITHUB_REF_NAME is "v1.2.3" on tag pushes; strip the
           # leading "v" for the npm semver. For non-tag runs keep VERSION as-is.
