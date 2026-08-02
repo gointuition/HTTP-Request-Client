@@ -56,17 +56,6 @@ echo "  httpClient.init()"
 echo "  result = httpClient.request({...})"
 echo "  httpClient.cleanup()"
 
-# ── Build a platform-specific wheel (cross-platform distribution) ──────────
-# The native library is copied into python/lib/ so it ships inside the wheel
-# via package_data. CI runs this on each OS/arch to produce one wheel per
-# platform (manylinux / macosx / win_amd64).
-echo ""
-echo "=== Building platform wheel ==="
-mkdir -p "$SCRIPT_DIR/lib"
-cp "$PROJECT_ROOT/lib/shared/$LIB_NAME" "$SCRIPT_DIR/lib/$LIB_NAME"
-python3 -m pip install --quiet build wheel setuptools cffi --break-system-packages 2>/dev/null || \
-  pip3 install --quiet build wheel setuptools cffi
-cd "$SCRIPT_DIR"
-python3 -m build --wheel --outdir "$SCRIPT_DIR/dist"
-echo "Wheel(s) produced in $SCRIPT_DIR/dist"
-ls -1 "$SCRIPT_DIR/dist"
+# ── Note: platform wheels are built by CI (setup.py bdist_wheel with the
+#    correct --plat-name), not here, to avoid emitting a generic py3-none-any
+#    wheel into python/dist that would otherwise clash with the named one.

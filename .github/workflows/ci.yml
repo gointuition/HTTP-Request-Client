@@ -719,6 +719,27 @@ jobs:
             echo "Created dist/$(basename "$w")"
           done
 
+          # ── 3b. Python: source distribution (sdist) ─────────────────────
+          # A pure-source sdist lets users on ANY platform install + compile
+          # locally as a fallback when no prebuilt wheel exists. We strip the
+          # prebuilt native lib from python/lib so the sdist stays source-only
+          # (the user builds libhttp2client on their target machine).
+          echo "Building Python sdist (source-only fallback)..."
+          if command -v python3 >/dev/null 2>&1; then
+            python3 -m pip install --quiet build 2>/dev/null || true
+            py_src="artifacts/python-binding-ubuntu-latest"
+            [ -d "$py_src" ] || py_src="artifacts/python-binding-macos-latest"
+            [ -d "$py_src" ] || py_src="artifacts/python-binding-windows-latest"
+            tmp_sdist="work/sdist-src"; rm -rf "$tmp_sdist"; cp -R "$py_src" "$tmp_sdist"
+            # Remove any prebuilt native lib so the sdist does not carry binaries.
+            rm -rf "$tmp_sdist/lib"
+            ( cd "$tmp_sdist" && python3 -m build --sdist --outdir "${{ github.workspace }}/dist" )
+            sd="$(ls -1 "${{ github.workspace }}/dist"/*.tar.gz 2>/dev/null | grep -v -- '-all.tar.gz' | tail -1)"
+            [ -n "$sd" ] && echo "Created dist/$(basename "$sd")" || echo "::warning:: sdist build produced no tarball"
+          else
+            echo "::warning:: python3 unavailable; skipping Python sdist (wheels still published)"
+          fi
+
           # ── 4. Java: classifier jars (standard Maven layout) ─────────────
           # Main jar = classes only (no native); one classifier jar per platform
           # carrying native/<plat>/{libhttp2client,libhttp2jni}.*.
@@ -727,7 +748,7 @@ jobs:
           unzip -q -o "work/jars/java-linux.jar" -d work/jar-main
           # Remove all native bits from the main jar (classes + deps only).
           rm -rf work/jar-main/native
-          jar cfm "dist/http2-client-java-${VERSION}.jar" META-INF/MANIFEST.MF -C work/jar-main .
+          jar cfm "dist/http2-client-java-${VERSION}.jar" work/jar-main/META-INF/MANIFEST.MF -C work/jar-main .
           echo "Created dist/http2-client-java-${VERSION}.jar (classes only)"
 
           for plat in linux macos win; do
