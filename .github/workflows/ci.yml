@@ -237,10 +237,11 @@ jobs:
           cd "${{ github.workspace }}/python"
           python3 -m pip install --quiet --break-system-packages build cffi 2>/dev/null || python3 -m pip install --quiet build cffi
           LIB_NAME="libhttp2client.so"
-          case "$(uname)" in Darwin) LIB_NAME="libhttp2client.dylib" ;; esac
+          PLAT_NAME="manylinux_2_17_x86_64"
+          case "$(uname)" in Darwin) LIB_NAME="libhttp2client.dylib"; PLAT_NAME="macosx_11_0_x86_64" ;; esac
           mkdir -p lib
           cp "${{ github.workspace }}/lib/shared/$LIB_NAME" "lib/$LIB_NAME"
-          python3 -m build --wheel --outdir dist
+          python3 setup.py bdist_wheel --plat-name="$PLAT_NAME" --dist-dir dist
           ls -1 dist
 
       - name: Upload Python wheel
@@ -580,7 +581,7 @@ jobs:
           python -m pip install --quiet build cffi
           New-Item -ItemType Directory -Force lib | Out-Null
           Copy-Item "${{ github.workspace }}\lib\shared\libhttp2client.dll" "lib\libhttp2client.dll"
-          python -m build --wheel --outdir dist
+          python setup.py bdist_wheel --plat-name=win_amd64 --dist-dir dist
           Get-ChildItem dist
 
       - name: Upload Python wheel (Windows)
@@ -726,7 +727,7 @@ jobs:
           unzip -q -o "work/jars/java-linux.jar" -d work/jar-main
           # Remove all native bits from the main jar (classes + deps only).
           rm -rf work/jar-main/native
-          jar cfm "dist/http2-client-java-${VERSION}.jar" -C work/jar-main META-INF/MANIFEST.MF .
+          jar cfm "dist/http2-client-java-${VERSION}.jar" META-INF/MANIFEST.MF -C work/jar-main .
           echo "Created dist/http2-client-java-${VERSION}.jar (classes only)"
 
           for plat in linux macos win; do
