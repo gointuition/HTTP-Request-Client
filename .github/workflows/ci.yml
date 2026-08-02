@@ -617,13 +617,15 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"
-          jar="artifacts/java-jar-ubuntu-latest"/*.jar
-          if [ ! -f $jar ]; then
-            echo "::error:: Java JAR artifact not found"
+          mkdir -p dist
+          # Resolve the single JAR via find (avoids unquoted-glob word-splitting).
+          jar="$(find artifacts/java-jar-ubuntu-latest -maxdepth 1 -name '*.jar' -print -quit)"
+          if [ -z "$jar" ] || [ ! -f "$jar" ]; then
+            echo "::error:: Java JAR artifact not found under artifacts/java-jar-ubuntu-latest"
             exit 1
           fi
-          # Strip the embedded version so the published name is stable.
-          cp $jar "dist/http2-client-java-${VERSION}.jar"
+          # Publish with a stable, versioned name.
+          cp "$jar" "dist/http2-client-java-${VERSION}.jar"
           echo "Created dist/http2-client-java-${VERSION}.jar"
 
       - name: Generate checksums
