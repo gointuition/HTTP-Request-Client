@@ -409,13 +409,28 @@ jobs:
         with:
           node-version: '20'
 
+      # Cache npm deps + node-gyp's downloaded Node headers so re-runs skip the
+      # (slow) npm install and header fetch. Keyed on package-lock.json so a dep
+      # change forces a refresh. (The native .node addon itself is rebuilt each
+      # run via `node-gyp rebuild`, which is comparatively fast vs. npm install.)
+      - name: Cache Node.js dependencies (Windows)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/nodejs/node_modules
+            ~\AppData\Local\node-gyp\Cache
+            ~\node-gyp
+          key: node-deps-windows-${{ hashFiles('nodejs/package-lock.json') }}
+          restore-keys: |
+            node-deps-windows-
+
       - name: Node.js — build and run test.js (Windows)
         id: node_test_win
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           # Prepend MSYS2 mingw64\bin so gendef (from mingw-w64-x86_64-tools-git)
-          # is discoverable; keep the rest of PATH (System32, VS, ...) intact.
+          # is discoverable; keep the rest of PATH (SystemFiles, VS, ...) intact.
           $env:PATH = "${{ steps.msys2_setup.outputs.msys2-location }}\mingw64\bin;" + $env:PATH
           Set-Location "${{ github.workspace }}\nodejs"
           # Verify gendef is reachable (the import-lib step needs it).
@@ -449,6 +464,7 @@ jobs:
 
           # Install deps WITHOUT running the install script, then build
           # explicitly so a build failure aborts before test.js runs.
+          # `npm install` is now a no-op when node_modules is restored from cache.
           npm install --ignore-scripts
           # build-addon.js: generates http2client.lib (gendef + lib.exe),
           # runs node-gyp rebuild (MSVC), copies runtime DLLs next to addon.
