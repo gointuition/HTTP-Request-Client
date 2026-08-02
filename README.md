@@ -332,6 +332,95 @@ cmake --build build
 | Zstd | [Zstd](https://github.com/facebook/zstd) | Response decompression |
 | zlib | [zlib](https://www.zlib.net/) | gzip / deflate decompression |
 
+## Using the Release Artifacts
+
+Every [GitHub Release](https://github.com/your-org/Http2/releases) ships prebuilt binaries so you do **not** need to compile the C library (BoringSSL, etc.) yourself. Pick the assets for your platform:
+
+| Artifact | Contents | Platforms |
+|----------|----------|-----------|
+| `http2client-<ver>-<plat>.tar.gz` | C shared library (`libhttp2client.{so,dylib,dll}`) + public `include/*.h` | `linux`, `macos`, `win` |
+| `http2client-nodejs-<ver>-<plat>.tar.gz` | Node.js N-API addon (`nodejs/`) | `linux`, `macos`, `win` |
+| `http2client-python-<ver>-<plat>.tar.gz` | Python cffi binding (`python/`) | `linux`, `macos`, `win` |
+| `http2-client-java-<ver>.jar` | Cross-platform fat JAR (native libs inside) | all |
+
+`<plat>` is `linux` / `macos` / `win`. Download the matching set (the binding archives do **not** include the C library — extract the C archive too, or `npm install` / `pip install cffi` will fail to find the native lib).
+
+```bash
+# Example: Linux, version 1.0.0
+VER=1.0.0
+curl -sSL -O "https://github.com/your-org/Http2/releases/download/v${VER}/http2client-${VER}-linux.tar.gz"
+curl -sSL -O "https://github.com/your-org/Http2/releases/download/v${VER}/http2client-nodejs-${VER}-linux.tar.gz"
+tar -xzf http2client-${VER}-linux.tar.gz        # -> libhttp2client.so + include/
+tar -xzf http2client-nodejs-${VER}-linux.tar.gz # -> nodejs/
+```
+
+The C library must be loadable at runtime (see the per-binding notes below). The simplest approach is to keep the shared library next to the binding, or add its directory to the loader path:
+
+| Platform | Loader path env / flag |
+|----------|------------------------|
+| Linux | `LD_LIBRARY_PATH=/path/to/libdir` |
+| macOS | `DYLD_LIBRARY_PATH=/path/to/libdir` (or `install_name_tool` the rpath) |
+| Windows | add the directory to `PATH` |
+
+A `checksums-<ver>.sha256` file is published alongside the assets — verify before use:
+
+```bash
+sha256sum -c "checksums-${VER}.sha256"
+```
+
+### Node.js
+
+The `nodejs/` archive contains the prebuilt `http2addon.node` plus its runtime DLLs (Windows) and `node_modules`. The addon expects `libhttp2client` beside it (or on the loader path).
+
+```bash
+cd nodejs
+# make the C shared library discoverable, e.g. copy it next to the addon:
+cp ../libhttp2client.so ./build/Release/    # Linux (macOS: .dylib, Windows: .dll)
+# Windows: ensure MinGW runtime DLLs (libwinpthread-1.dll, libgcc_s_seh-1.dll,
+#          libstdc++-6.dll) and libhttp2client.dll are on PATH
+
+node -e "const c=require('./index.js'); c.init(); console.log(c.request({method:'GET',url:'https://tls.peet.ws/api/all'})); c.cleanup();"
+```
+
+For concurrency, raise the libuv pool (see [nodejs/README.MD](nodejs/README.MD)):
+
+```bash
+UV_THREADPOOL_SIZE=8 node your-app.js
+```
+
+### Python
+
+The `python/` archive contains `http2_client.py` (cffi ABI mode) which `dlopen`s `libhttp2client` directly — no C compiler needed. Install cffi, then point the binding at the shared library:
+
+```bash
+pip install cffi
+cd python
+# place libhttp2client.{so,dylib,dll} next to http2_client.py, or:
+export LD_LIBRARY_PATH=/path/to/libdir   # macOS: DYLD_LIBRARY_PATH, Windows: add to PATH
+
+python -c "import httpClient; httpClient.init(); print(httpClient.request({'method':'GET','url':'https://tls.peet.ws/api/all'})); httpClient.cleanup()"
+```
+
+### Java
+
+The fat JAR is cross-platform: the native libraries (`libhttp2client` + JNI bridge) are bundled inside `/native/` and extracted to a temp dir at runtime, so you only need a JDK — no separate C library download.
+
+```bash
+# Linux / macOS / Windows (JDK >= 16 needs --enable-native-access; <16 must omit it)
+java --enable-native-access=ALL-UNNAMED -cp http2-client-java-1.0.0.jar Test
+java --enable-native-access=ALL-UNNAMED -cp http2-client-java-1.0.0.jar Example
+```
+
+Embed it as a normal dependency (`Http2Client` lives in the unnamed module, call directly without import):
+
+```java
+Http2Client.init();
+String result = Http2Client.request(requestJsonString);
+Http2Client.cleanup();
+```
+
+> **Windows note:** the JNI bridge depends on MinGW runtime DLLs (`libwinpthread-1.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll`). Ensure `C:\msys64\mingw64\bin` is on `PATH`, or copy those DLLs next to the JAR.
+
 ## License
 
 Apache-2.0

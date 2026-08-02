@@ -567,10 +567,16 @@ jobs:
           merge-multiple: false
           path: artifacts
 
-      # Re-package each platform's bundle: shared library + headers + the three
-      # language bindings (Node addon, Python files, Java fat JAR) built for that
-      # same platform, so consumers get a ready-to-use package per OS/arch.
-      - name: Package per-platform bundles
+      # Release layout:
+      #   C library / Node.js / Python are published PER PLATFORM (each builds its
+      #   own native bits: shared lib, .node addon, .pyd, bundled DLLs).
+      #   Java is published ONCE as a cross-platform fat JAR (platform-agnostic
+      #   JVM bytecode + native libs bundled inside).
+      #   1. C shared library  : http2client-<ver>-<plat>.tar.gz
+      #   2. Node.js binding   : http2client-nodejs-<ver>-<plat>.tar.gz
+      #   3. Python binding    : http2client-python-<ver>-<plat>.tar.gz
+      #   4. Java binding      : http2-client-java-<ver>.jar   (cross-platform)
+      - name: Package release assets
         shell: bash
         run: |
           set -euo pipefail
@@ -579,7 +585,6 @@ jobs:
           mkdir -p dist work
 
           for os in ubuntu-latest macos-latest windows-latest; do
-            # Normalize platform name (windows-latest -> win, etc.).
             case "$os" in
               ubuntu-latest)  plat="linux" ;;
               macos-latest)   plat="macos" ;;
@@ -590,41 +595,35 @@ jobs:
             lib="artifacts/lib-http2client-${os}"
             node="artifacts/nodejs-addon-${os}"
             py="artifacts/python-binding-${os}"
-            jar="artifacts/java-jar-${os}"
 
-            if [ ! -d "$lib" ] || [ ! -d "$node" ] || [ ! -d "$py" ] || [ ! -d "$jar" ]; then
+            if [ ! -d "$lib" ] || [ ! -d "$node" ] || [ ! -d "$py" ]; then
               echo "::error:: missing release artifact for ${os} (have: $(ls artifacts))"
               exit 1
             fi
 
-            # Assemble a clean staging tree for the platform bundle.
-            stage="work/bundle-${plat}"
+            # ---- 1. C shared library ----
+            stage="work/lib-${plat}"
             rm -rf "$stage" && mkdir -p "$stage"
             cp -R "$lib"/. "$stage"/            # shared lib + include/
-            cp -R "$node"  "$stage"/nodejs     # N-API addon + index.js + node_modules
-            cp -R "$py"    "$stage"/python     # Python binding (.py)
-            cp "$jar"/*.jar "$stage"/           # Java fat JAR (platform build)
+            tar -czf "dist/http2client-${VERSION}-${plat}.tar.gz" -C "$stage" .
+            echo "Created dist/http2client-${VERSION}-${plat}.tar.gz"
 
-            bundle="http2client-${VERSION}-${plat}"
-            tar -czf "dist/${bundle}.tar.gz" -C "$stage" .
-            echo "Created dist/${bundle}.tar.gz"
+            # ---- 2. Node.js binding (platform-specific addon / DLLs) ----
+            tar -czf "dist/http2client-nodejs-${VERSION}-${plat}.tar.gz" -C "$node" .
+            echo "Created dist/http2client-nodejs-${VERSION}-${plat}.tar.gz"
+
+            # ---- 3. Python binding (platform-specific .pyd / DLLs) ----
+            tar -czf "dist/http2client-python-${VERSION}-${plat}.tar.gz" -C "$py" .
+            echo "Created dist/http2client-python-${VERSION}-${plat}.tar.gz"
           done
 
-      # The Java fat JAR is platform-agnostic (JVM bytecode + native libs bundled
-      # inside), so also publish one canonical, cross-platform artifact.
-      - name: Publish cross-platform Java JAR
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
-          mkdir -p dist
+          # ---- 4. Java fat JAR (cross-platform, from ubuntu build) ----
           # Resolve the single JAR via find (avoids unquoted-glob word-splitting).
           jar="$(find artifacts/java-jar-ubuntu-latest -maxdepth 1 -name '*.jar' -print -quit)"
           if [ -z "$jar" ] || [ ! -f "$jar" ]; then
             echo "::error:: Java JAR artifact not found under artifacts/java-jar-ubuntu-latest"
             exit 1
           fi
-          # Publish with a stable, versioned name.
           cp "$jar" "dist/http2-client-java-${VERSION}.jar"
           echo "Created dist/http2-client-java-${VERSION}.jar"
 
@@ -633,7 +632,7 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum *.tar.gz *.jar > "checksums-${GITHUB_REF_NAME}.sha256"
+          sha256sum * > "checksums-${GITHUB_REF_NAME}.sha256"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
