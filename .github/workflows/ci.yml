@@ -55,7 +55,7 @@ jobs:
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
+          path: ${{ github.workspace }}/.ccache
           key: ccache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             ccache-${{ runner.os }}-
@@ -239,10 +239,16 @@ jobs:
       # ccache caches compiler outputs by input hash, skipping recompilation of
       # unchanged objects (incl. the heavy third-party libraries). Persist the
       # cache across runs via actions/cache.
+      #
+      # IMPORTANT (MSYS2): ccache runs inside the MSYS2 shell, where `~` resolves
+      # to /home/runner, NOT the Windows C:\Users\runner that actions/cache uses.
+      # Mixing the two paths makes reads/writes land in different locations, so
+      # the cache is never hit. We therefore use an explicit workspace-relative
+      # path for BOTH the cache store and CCACHE_DIR so they always match.
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
+          path: .ccache
           key: ccache-Windows-${{ github.sha }}
           restore-keys: |
             ccache-Windows-
@@ -250,12 +256,19 @@ jobs:
       - name: Configure
         run: |
           export CCACHE_DIR="${{ github.workspace }}/.ccache"
+          export PATH="/mingw64/bin:$PATH"
+          ccache -M 1G
+          ccache -z
+          ccache -p | head -1
           cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: |
           export CCACHE_DIR="${{ github.workspace }}/.ccache"
+          export PATH="/mingw64/bin:$PATH"
           cmake --build build --parallel $(nproc)
+          echo "---- ccache stats ----"
+          ccache -s
 
       - name: Smoke test — GET
         working-directory: bin
