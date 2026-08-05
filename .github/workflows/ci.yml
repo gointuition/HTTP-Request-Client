@@ -35,21 +35,26 @@ jobs:
       # assembler (nasm) and ccache via dnf, then pull a modern CMake + Ninja
       # from PyPI (the `cmake`/`ninja` wheels bundle recent binaries).
       #
-      # NOTE: the container's default /usr/bin/python3 has NO pip. Use the
-      # bundled Pythons under /opt/python (each ships its own pip) instead.
-      # Select cp311 and prepend its bin/ to PATH so `python3`/`pip` resolve
-      # to a usable interpreter for this and later steps.
+      # NOTE: the container's default /usr/bin/python3 has NO pip. Use one of
+      # the bundled Pythons under /opt/python (each ships its own pip). The
+      # exact directory name varies across manylinux releases, so resolve it
+      # dynamically at runtime instead of hardcoding, then prepend its bin/ to
+      # PATH and use the full interpreter path for pip.
       - name: Install build tools
         run: |
           set -euxo pipefail
           dnf install -y --setopt=install_weak_deps=False \
             nasm ccache make gcc gcc-c++ git unzip
-          # Pick a modern manylinux Python (cp311) and make it the default.
-          PY311_BIN="/opt/python/cp311-cp311-manylinux_2_28/bin"
-          echo "$PY311_BIN" >> "$GITHUB_PATH"
-          export PATH="$PY311_BIN:$PATH"
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cmake ninja
+          # Resolve a bundled manylinux Python (prefer the newest 3.11+).
+          MANYLINUX_PY="$(ls -1d /opt/python/cp3*/bin/python3 2>/dev/null | sort -V | tail -1)"
+          [ -n "$MANYLINUX_PY" ] || { echo "::error:: no /opt/python interpreter found"; exit 1; }
+          echo "Using bundled Python: $MANYLINUX_PY"
+          PY_BIN_DIR="$(dirname "$MANYLINUX_PY")"
+          echo "$PY_BIN_DIR" >> "$GITHUB_PATH"
+          export PATH="$PY_BIN_DIR:$PATH"
+          "$MANYLINUX_PY" -m pip install --upgrade pip
+          "$MANYLINUX_PY" -m pip install cmake ninja
+          python3 --version
           cmake --version
           ninja --version
           ccache --version
