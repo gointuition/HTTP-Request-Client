@@ -703,40 +703,48 @@ jobs:
             # macOS:   libhttp2client.dylib / .1.0.0.dylib (compatibility @rpath).
             # Windows: libhttp2client.dll + MinGW runtime DLLs.
             # upload-artifact v4 may strip symlinks, so reconstruct them here.
-            soname="$( (objdump -p "$pb_dir/http2addon.node" 2>/dev/null || true; \
-                        otool -L "$pb_dir/http2addon.node" 2>/dev/null || true) \
-                      | grep -oE 'libhttp2client\.(so\.[0-9]+|so|[0-9]+\.[0-9]+\.[0-9]+\.dylib|dylib)' \
-                      | head -1)"
-            echo "Staging native lib for $plat (addon soname: ${soname:-unknown})"
+            #
+            # Extract the soname the addon links against (NEEDED on Linux,
+            # @rpath/... on macOS). objdump handles ELF on the ubuntu release
+            # host; for Mach-O we use the filename pattern directly (the macOS
+            # addon links @rpath/libhttp2client.1.dylib). grep returning no
+            # match (exit 1) must NOT abort the script (set -e), so guard it.
+            soname=""
+            case "$plat" in
+              linux)
+                soname="$(objdump -p "$pb_dir/http2addon.node" 2>/dev/null \
+                  | grep -oE 'NEEDED +libhttp2client\.so\.[0-9]+' \
+                  | grep -oE 'libhttp2client\.so\.[0-9]+' | head -1 || true)"
+                [ -z "$soname" ] && soname="libhttp2client.so.1"
+                ;;
+              macos)
+                soname="$(objdump -p "$pb_dir/http2addon.node" 2>/dev/null \
+                  | grep -oE 'libhttp2client\.[0-9]+\.[0-9]+\.[0-9]+\.dylib' \
+                  | head -1 || true)"
+                [ -z "$soname" ] && soname="libhttp2client.1.dylib"
+                ;;
+              win)
+                soname=""  # Windows: DLLs are found via same-dir search; no soname.
+                ;;
+            esac
+            echo "Staging native lib for $plat (addon soname: ${soname:-none})"
             if [ -n "$soname" ]; then
-              # Find the real library file (unversioned .so/.dylib or the
-              # fully-versioned one) in the lib artifact.
-              real="$(find "$lib" -xtype f \( -name 'libhttp2client.so.*' -o \
-                                           -name 'libhttp2client.dylib' -o \
-                                           -name 'libhttp2client.*.dylib' -o \
-                                           -name 'libhttp2client.so' \) -print -quit)"
-              if [ -z "$real" ]; then
-                # Some artifacts may be missing the real file (symlink stripped);
-                # fall back to any file whose name starts with libhttp2client.
-                real="$(find "$lib" -xtype f -name 'libhttp2client*' -print -quit)"
-              fi
+              # Find the real library file in the lib artifact. upload-artifact
+              # may have stripped symlinks, so prefer -xtype f (real files) but
+              # fall back to any matching name.
+              real="$(find "$lib" \( -xtype f -o -xtype l \) -name 'libhttp2client*' -print -quit)"
               if [ -n "$real" ]; then
-                # Determine the fully-versioned name from the real file.
                 base="$(basename "$real")"
-                cp "$real" "$pb_dir/$base"
-                # Reconstruct the symlink chain so the soname resolves.
-                # Linux: .so -> .so.1 -> .so.1.0.0 ; macOS: .dylib -> .1.0.0.dylib
+                cp -P "$real" "$pb_dir/$base"
+                # Reconstruct the soname symlink so the addon's NEEDED resolves.
                 ln -sf "$base" "$pb_dir/$soname" 2>/dev/null || true
-                # Also link the unversioned name to the soname for -l lookups.
-                if [ "$plat" = "linux" ]; then
-                  ln -sf "$soname" "$pb_dir/libhttp2client.so" 2>/dev/null || true
-                fi
                 echo "  staged $base -> $soname"
               else
                 echo "::warning:: no libhttp2client shared lib found in $lib for $plat"
               fi
             fi
-            # Windows: also copy the MinGW runtime DLLs (libgcc, libstdc++, etc).
+            # Windows: also copy the MinGW runtime DLLs (libgcc, libstdc++, etc)
+            # and libhttp2client.dll itself.
             for dll in "$lib"/*.dll; do
               [ -e "$dll" ] || continue
               cp "$dll" "$pb_dir/"
