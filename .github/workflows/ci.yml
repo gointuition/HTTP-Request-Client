@@ -55,21 +55,28 @@ jobs:
       # NOTE: the container's default /usr/bin/python3 has NO pip. Use one of
       # the bundled Pythons under /opt/python (each ships its own pip). The
       # exact directory name varies across manylinux releases, so resolve it
-      # dynamically at runtime instead of hardcoding, then prepend its bin/ to
-      # PATH and use the full interpreter path for pip.
+      # at runtime instead of hardcoding. Prefer a STABLE interpreter (cp311,
+      # cp312, cp313) over the newest preview (e.g. cp315-rc), which may lack
+      # setuptools / be too new for the wheel toolchain.
       - name: Install build tools
         run: |
           set -euxo pipefail
           dnf install -y --setopt=install_weak_deps=False \
             nasm ccache make gcc gcc-c++ git unzip
-          # Resolve a bundled manylinux Python (prefer the newest 3.11+).
-          MANYLINUX_PY="$(ls -1d /opt/python/cp3*/bin/python3 2>/dev/null | sort -V | tail -1)"
+          # Prefer a stable 3.11/3.12/3.13; fall back to the newest available.
+          MANYLINUX_PY=""
+          for p in cp311 cp312 cp313; do
+            cand="$(ls -1d /opt/python/${p}*/bin/python3 2>/dev/null | head -1)"
+            if [ -n "$cand" ]; then MANYLINUX_PY="$cand"; break; fi
+          done
+          [ -n "$MANYLINUX_PY" ] || MANYLINUX_PY="$(ls -1d /opt/python/cp3*/bin/python3 2>/dev/null | sort -V | tail -1)"
           [ -n "$MANYLINUX_PY" ] || { echo "::error:: no /opt/python interpreter found"; exit 1; }
           echo "Using bundled Python: $MANYLINUX_PY"
           PY_BIN_DIR="$(dirname "$MANYLINUX_PY")"
           echo "$PY_BIN_DIR" >> "$GITHUB_PATH"
           export PATH="$PY_BIN_DIR:$PATH"
           "$MANYLINUX_PY" -m pip install --upgrade pip
+          "$MANYLINUX_PY" -m pip install setuptools wheel
           "$MANYLINUX_PY" -m pip install cmake ninja
           python3 --version
           cmake --version
@@ -290,7 +297,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/python"
           python3 --version
           python3 -m pip install --upgrade pip
-          python3 -m pip install --quiet build cffi wheel
+          python3 -m pip install --quiet build cffi wheel setuptools
           mkdir -p lib
           cp "$GITHUB_WORKSPACE/lib/shared/libhttp2client.so" "lib/libhttp2client.so"
           python3 setup.py bdist_wheel --plat-name="manylinux_2_28_x86_64" --dist-dir dist
