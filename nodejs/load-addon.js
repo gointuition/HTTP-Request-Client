@@ -37,17 +37,35 @@ function detectTriplet () {
   return map[`${platName}-${arch}`] || null
 }
 
+// On Linux and macOS the addon links against libhttp2client.so / .dylib which
+// is shipped in the same prebuilds/ dir (see CI release job). The dynamic
+// linker won't look there by default, so prepend the dir to LD_LIBRARY_PATH
+// (Linux) / DYLD_FALLBACK_LIBRARY_PATH (macOS) before loading the .node.
+function ensureLibPath (addonDir) {
+  if (process.platform === 'linux') {
+    const sep = process.env.LD_LIBRARY_PATH ? ':' : ''
+    process.env.LD_LIBRARY_PATH = addonDir + sep + (process.env.LD_LIBRARY_PATH || '')
+  } else if (process.platform === 'darwin') {
+    const sep = process.env.DYLD_FALLBACK_LIBRARY_PATH ? ':' : ''
+    process.env.DYLD_FALLBACK_LIBRARY_PATH = addonDir + sep + (process.env.DYLD_FALLBACK_LIBRARY_PATH || '')
+  }
+}
+
 function loadAddon () {
   const triplet = detectTriplet()
   if (triplet) {
-    const prebuilt = path.join(__dirname, 'prebuilds', triplet, 'http2addon.node')
-    if (fs.existsSync(prebuilt)) {
-      return require(prebuilt)
+    const prebuildDir = path.join(__dirname, 'prebuilds', triplet)
+    const prebuild = path.join(prebuildDir, 'http2addon.node')
+    if (fs.existsSync(prebuild)) {
+      ensureLibPath(prebuildDir)
+      return require(prebuild)
     }
   }
   // Fallback: compile from source (binding.gyp) — requires the C library built.
-  const compiled = path.join(__dirname, 'build', 'Release', 'http2addon.node')
+  const compiledDir = path.join(__dirname, 'build', 'Release')
+  const compiled = path.join(compiledDir, 'http2addon.node')
   if (fs.existsSync(compiled)) {
+    ensureLibPath(compiledDir)
     return require(compiled)
   }
   throw new Error(

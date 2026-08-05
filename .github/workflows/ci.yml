@@ -696,12 +696,18 @@ jobs:
             addon="$(find "$node" -name 'http2addon.node' -print -quit)"
             [ -n "$addon" ] || { echo "::error:: http2addon.node not found in $node"; exit 1; }
             cp "$addon" "$pb_dir/http2addon.node"
-            # Copy any side-by-side DLLs (Windows MinGW runtimes) so the addon loads.
-            addon_dir="$(dirname "$addon")"
-            for dll in "$addon_dir"/*.dll; do
-              [ -e "$dll" ] || continue
-              cp "$dll" "$pb_dir/"
-            done
+            # Copy any side-by-side shared libraries the addon links against so
+            # it loads at runtime without the C library being installed system-wide.
+            # Windows: *.dll (libhttp2client.dll + MinGW runtimes).
+            # Linux:   libhttp2client.so* (symlink chain: .so -> .so.1 -> .so.1.0.0).
+            # macOS:   libhttp2client*.dylib (.dylib + versioned .1.0.0.dylib).
+            # cp -P preserves symlinks so the soname the addon links against resolves.
+            for f in "$lib"/libhttp2client.so "$lib"/libhttp2client.so.* \
+                     "$lib"/libhttp2client.dylib "$lib"/libhttp2client.*.dylib \
+                     "$lib"/*.dll; do
+              [ -e "$f" ] || continue
+              cp -P "$f" "$pb_dir/"
+            done 2>/dev/null || true
 
             # Java: stash each platform's fat JAR for the classifier split below.
             j="$(find "$jar" -maxdepth 1 -name '*.jar' -print -quit)"
