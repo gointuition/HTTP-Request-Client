@@ -183,6 +183,17 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          # The manylinux_2_28 container ships no Maven (setup-java only provides
+          # the JDK). Download a Maven binary into /opt and put it on PATH so
+          # java/build.sh finds `mvn`.
+          MAVEN_VERSION=3.9.9
+          if ! command -v mvn >/dev/null 2>&1; then
+            curl -fsSLO "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+            tar -xzf "apache-maven-${MAVEN_VERSION}-bin.tar.gz" -C /opt
+            echo "/opt/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
+            export PATH="/opt/apache-maven-${MAVEN_VERSION}/bin:$PATH"
+          fi
+          mvn --version | head -1
           cd "$GITHUB_WORKSPACE/java"
           bash build.sh 2>&1 | tee "$GITHUB_WORKSPACE/java_test.log"
           echo "---"
