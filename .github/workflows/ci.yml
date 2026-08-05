@@ -735,10 +735,14 @@ jobs:
               real="$(find "$lib" \( -xtype f -o -xtype l \) -name 'libhttp2client*' -print -quit)"
               if [ -n "$real" ]; then
                 base="$(basename "$real")"
-                cp -P "$real" "$pb_dir/$base"
-                # Reconstruct the soname symlink so the addon's NEEDED resolves.
-                ln -sf "$base" "$pb_dir/$soname" 2>/dev/null || true
-                echo "  staged $base -> $soname"
+                # Copy the real file under its soname name (e.g. libhttp2client.so.1)
+                # AND its original name. npm pack strips symlinks, so we use real
+                # file copies instead of symlinks to guarantee the soname the
+                # addon's NEEDED entry points to exists in the published tarball.
+                cp "$real" "$pb_dir/$soname"
+                # Also keep the original name so LD_LIBRARY_PATH / -l lookups work.
+                [ "$base" != "$soname" ] && cp "$real" "$pb_dir/$base"
+                echo "  staged $base as $soname"
               else
                 echo "::warning:: no libhttp2client shared lib found in $lib for $plat"
               fi
