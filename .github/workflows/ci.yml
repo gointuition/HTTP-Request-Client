@@ -82,10 +82,14 @@ jobs:
       # ccache caches compiler outputs by hashing inputs, so re-running the
       # pipeline (or bumping a dependency) skips recompiling unchanged .o files
       # — including the heavy third-party libraries (BoringSSL, etc.).
+      # Cache paths are RELATIVE: inside a container job the actions resolve
+      # them against the container's $GITHUB_WORKSPACE (the /__w mount), whereas
+      # the `${{ github.workspace }}` context points at the non-existent host
+      # path. Relative paths keep the cache in the right place on every runner.
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.ccache
+          path: .ccache
           key: ccache-Linux-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
           restore-keys: |
             ccache-Linux-${{ hashFiles('CMakeLists.txt') }}-
@@ -101,14 +105,13 @@ jobs:
             build-Linux-
 
       - name: Configure
-        env:
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        run: |
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        env:
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
           cmake --build build --parallel 4
           echo "---- ccache stats ----"
           ccache -s
@@ -152,7 +155,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cd "${{ github.workspace }}"
+          cd "$GITHUB_WORKSPACE"
           bash python/build.sh 2>&1 | tee python_test.log
           echo "---"
           if grep -q "All tests passed" python_test.log; then
@@ -180,10 +183,10 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cd "${{ github.workspace }}/java"
-          bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
+          cd "$GITHUB_WORKSPACE/java"
+          bash build.sh 2>&1 | tee "$GITHUB_WORKSPACE/java_test.log"
           echo "---"
-          if grep -q "All tests passed" "${{ github.workspace }}/java_test.log"; then
+          if grep -q "All tests passed" "$GITHUB_WORKSPACE/java_test.log"; then
             echo "::notice:: Java test PASSED"
           fi
 
@@ -206,11 +209,11 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cd "${{ github.workspace }}/nodejs"
+          cd "$GITHUB_WORKSPACE/nodejs"
           bash build.sh
-          node test.js 2>&1 | tee "${{ github.workspace }}/nodejs_test.log"
+          node test.js 2>&1 | tee "$GITHUB_WORKSPACE/nodejs_test.log"
           echo "---"
-          if grep -q "All tests passed" "${{ github.workspace }}/nodejs_test.log"; then
+          if grep -q "All tests passed" "$GITHUB_WORKSPACE/nodejs_test.log"; then
             echo "::notice:: Node.js test PASSED"
           fi
 
@@ -266,12 +269,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "${{ github.workspace }}/python"
+          cd "$GITHUB_WORKSPACE/python"
           python3 --version
           python3 -m pip install --upgrade pip
           python3 -m pip install --quiet build cffi wheel
           mkdir -p lib
-          cp "${{ github.workspace }}/lib/shared/libhttp2client.so" "lib/libhttp2client.so"
+          cp "$GITHUB_WORKSPACE/lib/shared/libhttp2client.so" "lib/libhttp2client.so"
           python3 setup.py bdist_wheel --plat-name="manylinux_2_28_x86_64" --dist-dir dist
           ls -1 dist
 
@@ -412,10 +415,10 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cd "${{ github.workspace }}/java"
-          bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
+          cd "$GITHUB_WORKSPACE/java"
+          bash build.sh 2>&1 | tee "$GITHUB_WORKSPACE/java_test.log"
           echo "---"
-          if grep -q "All tests passed" "${{ github.workspace }}/java_test.log"; then
+          if grep -q "All tests passed" "$GITHUB_WORKSPACE/java_test.log"; then
             echo "::notice:: Java test PASSED"
           fi
 
