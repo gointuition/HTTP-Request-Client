@@ -25,19 +25,19 @@ jobs:
     container: quay.io/pypa/manylinux_2_28_x86_64
     timeout-minutes: 60
 
-    defaults:
-      run:
-        # In a container, the runner's default working directory points at the
-        # HOST path (/home/runner/work/...) which does not exist inside the
-        # container (the workspace is mounted at /__w/...). Without this, any
-        # relative `working-directory` (e.g. `bin`) cd's to the host path and
-        # fails. Anchor every step to ${{ github.workspace }}, which GitHub
-        # expands to the in-container mount point.
-        working-directory: ${{ github.workspace }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # IMPORTANT (containers): inside a container job, the runner's default
+      # working directory and the `${{ github.workspace }}` context resolve to
+      # the HOST path (/home/runner/work/...), which does NOT exist inside the
+      # container. The workspace is actually mounted at /__w/<repo>/<repo> and
+      # is exported as the $GITHUB_WORKSPACE environment variable. So this job
+      # uses $GITHUB_WORKSPACE explicitly instead of relative `working-directory`
+      # or ${{ github.workspace }}.
+      - name: Show workspace path
+        run: echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE pwd=$(pwd)"
 
       # The manylinux_2_28 container is AlmaLinux 8 based. It ships a full
       # gcc/make/git toolchain but only CMake 3.20 (AppStream), while this
@@ -119,16 +119,16 @@ jobs:
       # run in CI (the other verb/concurrency tests are flaky over the network).
       - name: Smoke test — GET
         shell: bash
-        working-directory: bin
         run: |
           set -o pipefail
+          cd "$GITHUB_WORKSPACE/bin"
           ./test_GET 2>&1 | tee test_GET.log
 
       - name: Smoke test — POST
         shell: bash
-        working-directory: bin
         run: |
           set -o pipefail
+          cd "$GITHUB_WORKSPACE/bin"
           ./test_POST 2>&1 | tee test_POST.log
 
       # Surface the built artifacts for quick inspection on failures.
@@ -354,16 +354,16 @@ jobs:
       # run in CI (the other verb/concurrency tests are flaky over the network).
       - name: Smoke test — GET
         shell: bash
-        working-directory: bin
         run: |
           set -o pipefail
+          cd "$GITHUB_WORKSPACE/bin"
           ./test_GET 2>&1 | tee test_GET.log
 
       - name: Smoke test — POST
         shell: bash
-        working-directory: bin
         run: |
           set -o pipefail
+          cd "$GITHUB_WORKSPACE/bin"
           ./test_POST 2>&1 | tee test_POST.log
 
       - name: Upload C test logs
