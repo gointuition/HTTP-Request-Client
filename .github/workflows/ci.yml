@@ -34,11 +34,20 @@ jobs:
       # project requires CMake >= 3.29 (see CMakeLists.txt). So install the
       # assembler (nasm) and ccache via dnf, then pull a modern CMake + Ninja
       # from PyPI (the `cmake`/`ninja` wheels bundle recent binaries).
+      #
+      # NOTE: the container's default /usr/bin/python3 has NO pip. Use the
+      # bundled Pythons under /opt/python (each ships its own pip) instead.
+      # Select cp311 and prepend its bin/ to PATH so `python3`/`pip` resolve
+      # to a usable interpreter for this and later steps.
       - name: Install build tools
         run: |
           set -euxo pipefail
           dnf install -y --setopt=install_weak_deps=False \
             nasm ccache make gcc gcc-c++ git unzip
+          # Pick a modern manylinux Python (cp311) and make it the default.
+          PY311_BIN="/opt/python/cp311-cp311-manylinux_2_28/bin"
+          echo "$PY311_BIN" >> "$GITHUB_PATH"
+          export PATH="$PY311_BIN:$PATH"
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake ninja
           cmake --version
@@ -229,16 +238,18 @@ jobs:
       # Build a manylinux_2_28 wheel (matches the container's glibc). The native
       # lib is copied into python/lib/ and shipped inside the wheel via
       # package_data, so each OS/arch produces its own self-contained .whl.
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
+      #
+      # Use the container's bundled Python (cp311 under /opt/python, selected
+      # and put on PATH by the "Install build tools" step) rather than
+      # actions/setup-python, so the wheel is built with a real manylinux
+      # interpreter.
       - name: Build Python wheel
         shell: bash
         run: |
           set -euo pipefail
           cd "${{ github.workspace }}/python"
+          python3 --version
+          python3 -m pip install --upgrade pip
           python3 -m pip install --quiet build cffi wheel
           mkdir -p lib
           cp "${{ github.workspace }}/lib/shared/libhttp2client.so" "lib/libhttp2client.so"
