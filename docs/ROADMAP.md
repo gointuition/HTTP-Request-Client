@@ -15,3 +15,4 @@
 - [ ] **Calculate Content-Length in C** — Diff from NodeJS sometimes
 - [ ] **PSK Share** — Diff proxy, diff PSK
 - [ ] **Proxy 407 Reusage** — Disable reusage if 407
+- [ ] **CONNECT Timeout** — Sometimes CONNECT cost too much time
