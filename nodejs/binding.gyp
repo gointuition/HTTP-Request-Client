@@ -30,12 +30,18 @@
         ["OS=='mac'", {
           "xcode_settings": {
             "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
-            "OTHER_LDFLAGS": ["-Wl,-rpath,@loader_path/../../../lib/shared"]
+            "OTHER_LDFLAGS": [
+              "-Wl,-rpath,@loader_path/../../../lib/shared",
+              "-Wl,-rpath,@loader_path"
+            ]
           }
         }],
         ["OS=='linux'", {
           "cflags_cc": ["-std=c++17"],
-          "ldflags": ["-Wl,-rpath,\$$ORIGIN/../../../lib/shared"]
+          "ldflags": [
+            "-Wl,-rpath,\$$ORIGIN/../../../lib/shared",
+            "-Wl,-rpath,\$$ORIGIN"
+          ]
         }],
         ["OS=='win'", {
           "msvs_settings": {

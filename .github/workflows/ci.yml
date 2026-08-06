@@ -14,18 +14,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+  # ================================================================
+  # Linux — builds inside the manylinux_2_28 container so the produced
+  # shared library / wheel stays ABI-compatible with glibc >= 2.28
+  # (the oldest distro this project targets).
+  # ================================================================
+  build-linux:
+    name: linux
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest, macos-latest ]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # IMPORTANT (containers): inside a container job, the runner's default
+      # working directory and the `${{ github.workspace }}` context resolve to
+      # the HOST path (/home/runner/work/...), which does NOT exist inside the
+      # container. The workspace is actually mounted at /__w/<repo>/<repo> and
+      # is exported as the $GITHUB_WORKSPACE environment variable. So this job
+      # uses $GITHUB_WORKSPACE explicitly instead of relative `working-directory`
+      # or ${{ github.workspace }}.
+      - name: Show workspace path
+        run: echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE pwd=$(pwd)"
+
+      # The container runs as root, but the checkout'd repo (and the third_party
+      # repos cloned later by CMake) are owned by a different uid, which makes
+      # git refuse any command with "dubious ownership". Mark every directory as
+      # safe so `git checkout`/`git clone`/`git apply` work inside the container.
+      - name: Mark git repositories as safe
+        run: git config --global --add safe.directory '*'
+
+      # The manylinux_2_28 container is AlmaLinux 8 based. It ships a full
+      # gcc/make/git toolchain but only CMake 3.20 (AppStream), while this
+      # project requires CMake >= 3.29 (see CMakeLists.txt). So install the
+      # assembler (nasm) and ccache via dnf, then pull a modern CMake + Ninja
+      # from PyPI (the `cmake`/`ninja` wheels bundle recent binaries).
+      #
+      # NOTE: the container's default /usr/bin/python3 has NO pip. Use one of
+      # the bundled Pythons under /opt/python (each ships its own pip). The
+      # exact directory name varies across manylinux releases, so resolve it
+      # at runtime instead of hardcoding. Prefer a STABLE interpreter (cp311,
+      # cp312, cp313) over the newest preview (e.g. cp315-rc), which may lack
+      # setuptools / be too new for the wheel toolchain.
+      - name: Install build tools
+        run: |
+          set -euxo pipefail
+          dnf install -y --setopt=install_weak_deps=False \
+            nasm ccache make gcc gcc-c++ git unzip
+          # Prefer a stable 3.11/3.12/3.13; fall back to the newest available.
+          MANYLINUX_PY=""
+          for p in cp311 cp312 cp313; do
+            cand="$(ls -1d /opt/python/${p}*/bin/python3 2>/dev/null | head -1)"
+            if [ -n "$cand" ]; then MANYLINUX_PY="$cand"; break; fi
+          done
+          [ -n "$MANYLINUX_PY" ] || MANYLINUX_PY="$(ls -1d /opt/python/cp3*/bin/python3 2>/dev/null | sort -V | tail -1)"
+          [ -n "$MANYLINUX_PY" ] || { echo "::error:: no /opt/python interpreter found"; exit 1; }
+          echo "Using bundled Python: $MANYLINUX_PY"
+          PY_BIN_DIR="$(dirname "$MANYLINUX_PY")"
+          echo "$PY_BIN_DIR" >> "$GITHUB_PATH"
+          export PATH="$PY_BIN_DIR:$PATH"
+          "$MANYLINUX_PY" -m pip install --upgrade pip
+          "$MANYLINUX_PY" -m pip install setuptools wheel
+          "$MANYLINUX_PY" -m pip install cmake ninja
+          python3 --version
+          cmake --version
+          ninja --version
+          ccache --version
 
       # Third-party sources (BoringSSL, brotli, jansson, zstd, ...) are cloned by
       # CMake at the pinned revisions declared in CMakeLists.txt. Cache them keyed
@@ -35,100 +91,85 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: third-party-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          key: third-party-Linux-${{ hashFiles('CMakeLists.txt') }}
 
       # ccache caches compiler outputs by hashing inputs, so re-running the
       # pipeline (or bumping a dependency) skips recompiling unchanged .o files
       # — including the heavy third-party libraries (BoringSSL, etc.).
-      # Installed manually (no third-party action dependency) and cached via
-      # actions/cache.
-      - name: Install ccache
-        run: |
-          if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            brew install ccache
-          else
-            sudo apt-get update && sudo apt-get install -y ccache
-          fi
-          ccache --version
-          ccache --zero-stats || true
-
+      # Cache paths are RELATIVE: inside a container job the actions resolve
+      # them against the container's $GITHUB_WORKSPACE (the /__w mount), whereas
+      # the `${{ github.workspace }}` context points at the non-existent host
+      # path. Relative paths keep the cache in the right place on every runner.
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.ccache
-          # Keyed on the third-party pins (CMakeLists.txt) so a commit that does
-          # NOT touch them reuses the cached compiler outputs — including the
-          # patched BoringSSL tree, whose source hashes are stable across such
-          # commits and therefore ccache-friendly.
-          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          path: .ccache
+          key: ccache-Linux-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}-
-            ccache-${{ runner.os }}-
+            ccache-Linux-${{ hashFiles('CMakeLists.txt') }}-
+            ccache-Linux-
 
       - name: Cache build directory
         uses: actions/cache@v4
         with:
           path: build
-          # Same pin-based key as ccache: when third-party pins are unchanged the
-          # entire build/ tree (incl. third-party .a files) is restored and Ninja
-          # skips recompiling BoringSSL/brotli/zstd/etc. entirely.
-          key: build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          key: build-Linux-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
           restore-keys: |
-            build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}-
-            build-${{ runner.os }}-
+            build-Linux-${{ hashFiles('CMakeLists.txt') }}-
+            build-Linux-
 
       - name: Configure
-        env:
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        run: |
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        env:
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
-        run: cmake --build build --parallel 4
+        run: |
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          cmake --build build --parallel 4
+          echo "---- ccache stats ----"
+          ccache -s
 
-      # Test executables validate basket JSON internally via jansson and exit
-      # non-zero on failure. Logs are still captured for inspection via artifacts.
+      # Smoke tests: run the C test executables. Each validates its basket JSON
+      # internally via jansson and exits non-zero on failure. These tests make
+      # live requests to httpbin.org; only the stable GET/POST smoke tests are
+      # run in CI (the other verb/concurrency tests are flaky over the network).
       - name: Smoke test — GET
         shell: bash
-        working-directory: bin
         run: |
           set -o pipefail
+          cd "$GITHUB_WORKSPACE/bin"
           ./test_GET 2>&1 | tee test_GET.log
 
       - name: Smoke test — POST
         shell: bash
-        working-directory: bin
         run: |
           set -o pipefail
+          cd "$GITHUB_WORKSPACE/bin"
           ./test_POST 2>&1 | tee test_POST.log
 
       # Surface the built artifacts for quick inspection on failures.
-      - name: Upload test logs
+      - name: Upload C test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs-${{ matrix.os }}
+          name: test-logs-ubuntu-latest
           path: bin/*.log
           if-no-files-found: ignore
 
       # ================================================================
       # Language bindings (test.py / test.js / Test.java)
-      # Every binding test exits non-zero on failure (sys.exit(1) /
-      # process.exit(1) / System.exit(1)), so the step itself captures
-      # pass/fail.  Output is additionally captured as a log artifact
-      # for post-mortem inspection.
+      # Every binding test exits non-zero on failure, so the step itself
+      # captures pass/fail. Output is captured as a log artifact.
       # ================================================================
 
-      # Python binding (cffi ABI mode — loads the shared library directly,
-      # no C compiler needed).  build.sh installs cffi and runs test.py.
-      # See python/README.md.
+      # Python binding (cffi ABI mode — loads the shared library directly).
       - name: Python — run test.py
         id: py_test
         shell: bash
         run: |
           set -o pipefail
-          cd "${{ github.workspace }}"
+          cd "$GITHUB_WORKSPACE"
           bash python/build.sh 2>&1 | tee python_test.log
           echo "---"
           if grep -q "All tests passed" python_test.log; then
@@ -139,7 +180,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: python-test-log-${{ matrix.os }}
+          name: python-test-log-ubuntu-latest
           path: python_test.log
           if-no-files-found: ignore
 
@@ -156,10 +197,21 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cd "${{ github.workspace }}/java"
-          bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
+          # The manylinux_2_28 container ships no Maven (setup-java only provides
+          # the JDK). Download a Maven binary into /opt and put it on PATH so
+          # java/build.sh finds `mvn`.
+          MAVEN_VERSION=3.9.9
+          if ! command -v mvn >/dev/null 2>&1; then
+            curl -fsSLO "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+            tar -xzf "apache-maven-${MAVEN_VERSION}-bin.tar.gz" -C /opt
+            echo "/opt/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
+            export PATH="/opt/apache-maven-${MAVEN_VERSION}/bin:$PATH"
+          fi
+          mvn --version | head -1
+          cd "$GITHUB_WORKSPACE/java"
+          bash build.sh 2>&1 | tee "$GITHUB_WORKSPACE/java_test.log"
           echo "---"
-          if grep -q "All tests passed" "${{ github.workspace }}/java_test.log"; then
+          if grep -q "All tests passed" "$GITHUB_WORKSPACE/java_test.log"; then
             echo "::notice:: Java test PASSED"
           fi
 
@@ -167,13 +219,248 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: java-test-log-${{ matrix.os }}
+          name: java-test-log-ubuntu-latest
           path: java_test.log
           if-no-files-found: ignore
 
       # Node.js binding (N-API native addon via node-gyp).
-      # build.sh runs npm install + build; test.js runs via node.
-      # See nodejs/README.MD.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Node.js — build and run test.js
+        id: node_test
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$GITHUB_WORKSPACE/nodejs"
+          bash build.sh
+          node test.js 2>&1 | tee "$GITHUB_WORKSPACE/nodejs_test.log"
+          echo "---"
+          if grep -q "All tests passed" "$GITHUB_WORKSPACE/nodejs_test.log"; then
+            echo "::notice:: Node.js test PASSED"
+          fi
+
+      # `npm install` (run by build.sh) re-injects gypfile:true and an install
+      # script into nodejs/package.json. Restore the pristine git version so the
+      # published package does not force consumers to compile from source.
+      - name: Restore pristine nodejs/package.json
+        shell: bash
+        run: git checkout -- nodejs/package.json
+
+      - name: Upload Node.js test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-test-log-ubuntu-latest
+          path: nodejs_test.log
+          if-no-files-found: ignore
+
+      # Publish the compiled shared library + public headers so downstream
+      # consumers (and the release job) can fetch them without rebuilding.
+      - name: Upload library artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib-http2client-ubuntu-latest
+          path: |
+            lib/shared/*
+            include/*.h
+          if-no-files-found: error
+
+      - name: Upload Node.js addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-addon-ubuntu-latest
+          path: nodejs
+          if-no-files-found: error
+
+      - name: Upload Python binding
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-binding-ubuntu-latest
+          path: python
+          if-no-files-found: error
+
+      # Build a manylinux_2_28 wheel (matches the container's glibc). The native
+      # lib is copied into python/lib/ and shipped inside the wheel via
+      # package_data, so each OS/arch produces its own self-contained .whl.
+      #
+      # Use the container's bundled Python (cp311 under /opt/python, selected
+      # and put on PATH by the "Install build tools" step) rather than
+      # actions/setup-python, so the wheel is built with a real manylinux
+      # interpreter.
+      - name: Build Python wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/python"
+          python3 --version
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --quiet build cffi wheel setuptools
+          mkdir -p lib
+          cp "$GITHUB_WORKSPACE/lib/shared/libhttp2client.so" "lib/libhttp2client.so"
+          python3 setup.py bdist_wheel --plat-name="manylinux_2_28_x86_64" --dist-dir dist
+          ls -1 dist
+
+      - name: Upload Python wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-ubuntu-latest
+          path: python/dist/*.whl
+          if-no-files-found: error
+
+      - name: Upload Java JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-jar-ubuntu-latest
+          path: java/build/*.jar
+          if-no-files-found: error
+
+  # ================================================================
+  # macOS
+  # ================================================================
+  build-macos:
+    name: macos
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Third-party sources are cloned by CMake at pinned revisions; cache them
+      # keyed on CMakeLists.txt so a valid cached checkout is reused.
+      - name: Cache third-party sources
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: third-party-macOS-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Install ccache
+        run: |
+          brew install ccache
+          ccache --version
+          ccache --zero-stats || true
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-macOS-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            ccache-macOS-${{ hashFiles('CMakeLists.txt') }}-
+            ccache-macOS-
+
+      - name: Cache build directory
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: build-macOS-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            build-macOS-${{ hashFiles('CMakeLists.txt') }}-
+            build-macOS-
+
+      - name: Configure
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          cmake --build build --parallel 4
+          echo "---- ccache stats ----"
+          ccache -s
+
+      # Run the full C test suite. Each executable validates its basket JSON
+      # internally via jansson and exits non-zero on failure.
+      # Smoke tests: run the C test executables. Each validates its basket JSON
+      # internally via jansson and exits non-zero on failure. These tests make
+      # live requests to httpbin.org; only the stable GET/POST smoke tests are
+      # run in CI (the other verb/concurrency tests are flaky over the network).
+      - name: Smoke test — GET
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$GITHUB_WORKSPACE/bin"
+          ./test_GET 2>&1 | tee test_GET.log
+
+      - name: Smoke test — POST
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$GITHUB_WORKSPACE/bin"
+          ./test_POST 2>&1 | tee test_POST.log
+
+      - name: Upload C test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-macos-latest
+          path: bin/*.log
+          if-no-files-found: ignore
+
+      # ================================================================
+      # Language bindings (test.py / test.js / Test.java)
+      # ================================================================
+
+      # Python binding (cffi ABI mode — loads the shared library directly).
+      - name: Python — run test.py
+        id: py_test
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "${{ github.workspace }}"
+          bash python/build.sh 2>&1 | tee python_test.log
+          echo "---"
+          if grep -q "All tests passed" python_test.log; then
+            echo "::notice:: Python test PASSED"
+          fi
+
+      - name: Upload Python test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-log-macos-latest
+          path: python_test.log
+          if-no-files-found: ignore
+
+      # Java binding (JNI bridge; builds a fat JAR linking http2client + JNI
+      # bridge, then runs Test.java from the JAR).  See java/build.sh.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Java — build and run Test.java
+        id: java_test
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$GITHUB_WORKSPACE/java"
+          bash build.sh 2>&1 | tee "$GITHUB_WORKSPACE/java_test.log"
+          echo "---"
+          if grep -q "All tests passed" "$GITHUB_WORKSPACE/java_test.log"; then
+            echo "::notice:: Java test PASSED"
+          fi
+
+      - name: Upload Java test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-test-log-macos-latest
+          path: java_test.log
+          if-no-files-found: ignore
+
+      # Node.js binding (N-API native addon via node-gyp).
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Node.js — build and run test.js
         id: node_test
         shell: bash
@@ -187,11 +474,6 @@ jobs:
             echo "::notice:: Node.js test PASSED"
           fi
 
-      # `npm install` (run by build.sh) re-injects gypfile:true and an install
-      # script ("node-gyp rebuild") into nodejs/package.json because binding.gyp
-      # exists. Those fields MUST NOT ship in the published package (they force
-      # every consumer to compile from source, ignoring the prebuilt .node).
-      # Restore the pristine package.json from git before uploading the artifact.
       - name: Restore pristine nodejs/package.json
         shell: bash
         run: git checkout -- nodejs/package.json
@@ -200,40 +482,35 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nodejs-test-log-${{ matrix.os }}
+          name: nodejs-test-log-macos-latest
           path: nodejs_test.log
           if-no-files-found: ignore
 
-      # Publish the compiled shared library + public headers so downstream
-      # consumers (and the release job) can fetch them without rebuilding.
+      # Publish the compiled shared library + public headers for the release job.
       - name: Upload library artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lib-http2client-${{ matrix.os }}
+          name: lib-http2client-macos-latest
           path: |
             lib/shared/*
             include/*.h
           if-no-files-found: error
 
-      # Publish language bindings built above, so the release job can bundle
-      # them alongside the shared library per platform.
       - name: Upload Node.js addon
         uses: actions/upload-artifact@v4
         with:
-          name: nodejs-addon-${{ matrix.os }}
+          name: nodejs-addon-macos-latest
           path: nodejs
           if-no-files-found: error
 
       - name: Upload Python binding
         uses: actions/upload-artifact@v4
         with:
-          name: python-binding-${{ matrix.os }}
+          name: python-binding-macos-latest
           path: python
           if-no-files-found: error
 
       # Build a platform-specific wheel (standard cross-platform Python packaging).
-      # The native lib is copied into python/lib/ and shipped inside the wheel via
-      # package_data, so each OS/arch produces its own self-contained .whl.
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -244,33 +521,32 @@ jobs:
         run: |
           set -euo pipefail
           cd "${{ github.workspace }}/python"
-          python3 -m pip install --quiet --break-system-packages build cffi wheel 2>/dev/null || python3 -m pip install --quiet build cffi wheel
-          LIB_NAME="libhttp2client.so"
-          PLAT_NAME="manylinux_2_17_x86_64"
-          case "$(uname)" in Darwin) LIB_NAME="libhttp2client.dylib"; PLAT_NAME="macosx_11_0_x86_64" ;; esac
+          python3 -m pip install --quiet build cffi wheel
           mkdir -p lib
-          cp "${{ github.workspace }}/lib/shared/$LIB_NAME" "lib/$LIB_NAME"
-          python3 setup.py bdist_wheel --plat-name="$PLAT_NAME" --dist-dir dist
+          cp "${{ github.workspace }}/lib/shared/libhttp2client.dylib" "lib/libhttp2client.dylib"
+          python3 setup.py bdist_wheel --plat-name="macosx_11_0_x86_64" --dist-dir dist
           ls -1 dist
 
       - name: Upload Python wheel
         uses: actions/upload-artifact@v4
         with:
-          name: python-wheel-${{ matrix.os }}
+          name: python-wheel-macos-latest
           path: python/dist/*.whl
           if-no-files-found: error
 
       - name: Upload Java JAR
         uses: actions/upload-artifact@v4
         with:
-          name: java-jar-${{ matrix.os }}
+          name: java-jar-macos-latest
           path: java/build/*.jar
           if-no-files-found: error
 
-  # Windows builds use MSYS2 / MinGW-w64 (native MSVC is not supported).
+  # ================================================================
+  # Windows — uses MSYS2 / MinGW-w64 (native MSVC is not supported).
   # See README.md "Windows (MSYS2 / MinGW-w64)" for the toolchain setup.
-  build-and-test-windows:
-    name: windows-latest
+  # ================================================================
+  build-windows:
+    name: windows
     runs-on: windows-latest
     timeout-minutes: 60
 
@@ -312,15 +588,12 @@ jobs:
       #
       # IMPORTANT (MSYS2): ccache runs inside the MSYS2 shell, where `~` resolves
       # to /home/runner, NOT the Windows C:\Users\runner that actions/cache uses.
-      # Mixing the two paths makes reads/writes land in different locations, so
-      # the cache is never hit. We therefore use an explicit workspace-relative
-      # path for BOTH the cache store and CCACHE_DIR so they always match.
+      # We therefore use an explicit workspace-relative path for BOTH the cache
+      # store and CCACHE_DIR so they always match.
       - name: Cache ccache
         uses: actions/cache@v4
         with:
           path: .ccache
-          # Keyed on the third-party pins so an unchanged CMakeLists.txt reuses
-          # the cached compiler outputs (incl. the patched BoringSSL tree).
           key: ccache-Windows-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
           restore-keys: |
             ccache-Windows-${{ hashFiles('CMakeLists.txt') }}-
@@ -328,9 +601,7 @@ jobs:
 
       # CRITICAL: without caching build/, the restored third_party sources have no
       # matching object/library files, so Ninja recompiles BoringSSL (and every
-      # other third party) from scratch every run. Caching build/ keyed on the
-      # same pins lets Ninja treat the tree as up-to-date and skip third-party
-      # compilation entirely when the pins are unchanged.
+      # other third party) from scratch every run.
       - name: Cache build directory
         uses: actions/cache@v4
         with:
@@ -357,6 +628,12 @@ jobs:
           echo "---- ccache stats ----"
           ccache -s
 
+      # Run the full C test suite. Each executable validates its basket JSON
+      # internally via jansson and exits non-zero on failure.
+      # Smoke tests: run the C test executables. Each validates its basket JSON
+      # internally via jansson and exits non-zero on failure. These tests make
+      # live requests to httpbin.org; only the stable GET/POST smoke tests are
+      # run in CI (the other verb/concurrency tests are flaky over the network).
       - name: Smoke test — GET
         working-directory: bin
         run: |
@@ -472,8 +749,7 @@ jobs:
 
       # Cache npm deps + node-gyp's downloaded Node headers so re-runs skip the
       # (slow) npm install and header fetch. Keyed on package-lock.json so a dep
-      # change forces a refresh. (The native .node addon itself is rebuilt each
-      # run via `node-gyp rebuild`, which is comparatively fast vs. npm install.)
+      # change forces a refresh.
       - name: Cache Node.js dependencies (Windows)
         uses: actions/cache@v4
         with:
@@ -502,8 +778,6 @@ jobs:
           # it mis-parses the VS 18 install as "unknown version undefined").
           # Workaround: set VCINSTALLDIR + VSCMD_VER + WindowsSDKVersion to make
           # node-gyp's non-PowerShell path (findVSFromSpecifiedLocation) succeed.
-          # It needs all three: VCINSTALLDIR for the install path, VSCMD_VER for
-          # the version→year mapping (17.x → 2022), WindowsSDKVersion for the SDK.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsInstall = & $vswhere -latest -products * `
             -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
@@ -525,7 +799,6 @@ jobs:
 
           # Install deps WITHOUT running the install script, then build
           # explicitly so a build failure aborts before test.js runs.
-          # `npm install` is now a no-op when node_modules is restored from cache.
           npm install --ignore-scripts
           # build-addon.js: generates http2client.lib (gendef + lib.exe),
           # runs node-gyp rebuild (MSVC), copies runtime DLLs next to addon.
@@ -550,8 +823,7 @@ jobs:
           if-no-files-found: ignore
 
       # Same as the non-Windows job: npm install re-injects gypfile:true and an
-      # install script into nodejs/package.json. Restore the pristine git version
-      # so the published package does not force consumers to compile from source.
+      # install script into nodejs/package.json. Restore the pristine git version.
       - name: Restore pristine nodejs/package.json
         shell: bash
         run: git checkout -- nodejs/package.json
@@ -567,8 +839,6 @@ jobs:
             include/*.h
           if-no-files-found: error
 
-      # Publish language bindings built above, so the release job can bundle
-      # them alongside the shared library per platform.
       - name: Upload Node.js addon
         uses: actions/upload-artifact@v4
         with:
@@ -623,7 +893,7 @@ jobs:
     name: release
     # Only runs on tag pushes; PRs / main pushes skip this job.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [ build-and-test, build-and-test-windows ]
+    needs: [ build-linux, build-macos, build-windows ]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required to create a GitHub Release + upload assets
@@ -648,11 +918,11 @@ jobs:
       # Release layout — each component follows its language's package-manager
       # standard, published to GitHub Release as the distribution artifact:
       #   C library     : http2client-<ver>-all.tar.gz   (linux/ macos/ win/ subdirs)
-  #   Node.js       : http2-client-nodejs-<ver>.tgz  (npm pack: prebuilds/<plat>-<arch>/
-  #                   http2addon.node + runtime DLLs, load-addon.js picks by OS+arch)
+      #   Node.js       : http2-client-nodejs-<ver>.tgz  (npm pack: prebuilds/<plat>-<arch>/
+      #                   http2addon.node + runtime DLLs, load-addon.js picks by OS+arch)
       #   Python        : http2_client-<ver>-<plat>.whl  (3 platform wheels, self-contained)
-  #   Java          : http2-client-java-<ver>.jar    (single cross-platform fat
-  #                   JAR: classes + native/linux|macos|win — works on any OS)
+      #   Java          : http2-client-java-<ver>.jar    (single cross-platform fat
+      #                   JAR: classes + native/linux|macos|win — works on any OS)
       - name: Package release assets
         shell: bash
         run: |
@@ -696,12 +966,57 @@ jobs:
             addon="$(find "$node" -name 'http2addon.node' -print -quit)"
             [ -n "$addon" ] || { echo "::error:: http2addon.node not found in $node"; exit 1; }
             cp "$addon" "$pb_dir/http2addon.node"
-            # Copy any side-by-side DLLs (Windows MinGW runtimes) so the addon loads.
-            addon_dir="$(dirname "$addon")"
-            for dll in "$addon_dir"/*.dll; do
+            # Copy the shared C library (libhttp2client) next to the addon so it
+            # loads at runtime without being installed system-wide. The .node's
+            # RUNPATH includes $ORIGIN (see binding.gyp), so same-dir lookup works.
+            # Linux:   libhttp2client.so / .so.1 / .so.1.0.0 (symlink chain).
+            # macOS:   libhttp2client.dylib / .1.0.0.dylib (compatibility @rpath).
+            # Windows: libhttp2client.dll + MinGW runtime DLLs.
+            # upload-artifact v4 may strip symlinks, so reconstruct them here.
+            soname=""
+            case "$plat" in
+              linux)
+                soname="$(objdump -p "$pb_dir/http2addon.node" 2>/dev/null \
+                  | grep -oE 'NEEDED +libhttp2client\.so\.[0-9]+' \
+                  | grep -oE 'libhttp2client\.so\.[0-9]+' | head -1 || true)"
+                [ -z "$soname" ] && soname="libhttp2client.so.1"
+                ;;
+              macos)
+                soname="$(objdump -p "$pb_dir/http2addon.node" 2>/dev/null \
+                  | grep -oE 'libhttp2client\.[0-9]+\.[0-9]+\.[0-9]+\.dylib' \
+                  | head -1 || true)"
+                [ -z "$soname" ] && soname="libhttp2client.1.dylib"
+                ;;
+              win)
+                soname=""  # Windows: DLLs are found via same-dir search; no soname.
+                ;;
+            esac
+            echo "Staging native lib for $plat (addon soname: ${soname:-none})"
+            if [ -n "$soname" ]; then
+              # Find the real library file in the lib artifact. upload-artifact
+              # may have stripped symlinks, so prefer -xtype f (real files) but
+              # fall back to any matching name.
+              real="$(find "$lib" \( -xtype f -o -xtype l \) -name 'libhttp2client*' -print -quit)"
+              if [ -n "$real" ]; then
+                base="$(basename "$real")"
+                # Copy the real file under its soname name (e.g. libhttp2client.so.1)
+                # AND its original name. npm pack strips symlinks, so we use real
+                # file copies instead of symlinks to guarantee the soname the
+                # addon's NEEDED entry points to exists in the published tarball.
+                cp "$real" "$pb_dir/$soname"
+                # Also keep the original name so LD_LIBRARY_PATH / -l lookups work.
+                [ "$base" != "$soname" ] && cp "$real" "$pb_dir/$base"
+                echo "  staged $base as $soname"
+              else
+                echo "::warning:: no libhttp2client shared lib found in $lib for $plat"
+              fi
+            fi
+            # Windows: also copy the MinGW runtime DLLs (libgcc, libstdc++, etc)
+            # and libhttp2client.dll itself.
+            for dll in "$lib"/*.dll; do
               [ -e "$dll" ] || continue
               cp "$dll" "$pb_dir/"
-            done
+            done 2>/dev/null || true
 
             # Java: stash each platform's fat JAR for the classifier split below.
             j="$(find "$jar" -maxdepth 1 -name '*.jar' -print -quit)"
@@ -715,9 +1030,6 @@ jobs:
           echo "Created dist/http2client-${VERSION}-all.tar.gz"
 
           # ── 2. Node.js: standard npm tarball with prebuilds/ ──────────────
-          # Assemble a publishable package dir (JS + binding.gyp + prebuilds) and
-          # pack it. Consumers do `npm install ./http2-client-nodejs-<ver>.tgz`,
-          # load-addon.js picks the matching prebuild — no compilation needed.
           node_pkg="work/node-pkg"
           rm -rf "$node_pkg" && mkdir -p "$node_pkg"
           cp -R artifacts/nodejs-addon-ubuntu-latest/index.js \
@@ -727,16 +1039,12 @@ jobs:
           # CRITICAL: do NOT copy package.json from the artifact. build.sh runs
           # `npm install` in the nodejs/ dir, which re-injects gypfile:true and an
           # `install: "node-gyp rebuild"` script into package.json (because
-          # binding.gyp exists). Those fields force every consumer to compile from
-          # source, ignoring the prebuilt .node. Instead, extract the pristine
-          # package.json straight from git HEAD so the published package has no
-          # install script / gypfile. Also skip binding.gyp entirely (not needed
-          # at install time; load-addon.js uses prebuilds/).
+          # binding.gyp exists). Instead, extract the pristine package.json
+          # straight from git HEAD so the published package has no install script
+          # / gypfile. Also skip binding.gyp entirely (not needed at install time;
+          # load-addon.js uses prebuilds/).
           git show HEAD:nodejs/package.json > "$node_pkg/package.json"
           cp -R work/node/prebuilds "$node_pkg"/prebuilds
-          # npm only renders a lowercase README.md on the registry page. The
-          # nodejs-addon-* artifact carries the repo's README (renamed to lowercase
-          # in the repo), so copy it from there into the publishable package dir.
           for src in artifacts/nodejs-addon-ubuntu-latest/README.md \
                      artifacts/nodejs-addon-ubuntu-latest/README.MD; do
             if [ -f "$src" ]; then
@@ -744,9 +1052,6 @@ jobs:
               break
             fi
           done
-          # Pin the published version to the git tag so package.json never has to
-          # be bumped by hand. GITHUB_REF_NAME is "v1.2.3" on tag pushes; strip the
-          # leading "v" for the npm semver. For non-tag runs keep VERSION as-is.
           if [[ "$GITHUB_REF_NAME" == v* ]]; then
             PKG_VER="${GITHUB_REF_NAME#v}"
             echo "Setting published npm version to ${PKG_VER} (from tag ${GITHUB_REF_NAME})"
@@ -774,10 +1079,6 @@ jobs:
           done
 
           # ── 3b. Python: source distribution (sdist) ─────────────────────
-          # A pure-source sdist lets users on ANY platform install + compile
-          # locally as a fallback when no prebuilt wheel exists. We strip the
-          # prebuilt native lib from python/lib so the sdist stays source-only
-          # (the user builds libhttp2client on their target machine).
           echo "Building Python sdist (source-only fallback)..."
           if command -v python3 >/dev/null 2>&1; then
             python3 -m pip install --quiet build 2>/dev/null || true
@@ -795,12 +1096,6 @@ jobs:
           fi
 
           # ── 4. Java: single cross-platform fat JAR ──────────────────────
-          # Merge the classes from one platform's fat JAR with the NATIVE
-          # libraries of ALL three platforms. Each platform stores its natives
-          # directly under native/ (no <plat> subdir), so we relocate them into
-          # native/<plat>/ before repacking. At runtime loadNativeLibrary() picks
-          # the matching native/<plat>/ sub-directory via platformDir(), so a
-          # single JAR works unchanged on linux / macos / win.
           echo "Merging all platforms' native libs into one fat JAR..."
           rm -rf work/jar-all && mkdir -p work/jar-all
           # Base classes/deps from any platform (they are identical bytecode).
@@ -836,8 +1131,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Tag is derived from the triggering ref; generate release notes
-          # automatically from merged PRs/commits since the last tag.
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
@@ -851,18 +1144,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Publish to npm registry ───────────────────────────────────────────
-      # The Node tgz already bundles prebuilds for all platforms (incl. darwin-arm64
-      # via the macos-latest arm64 runner), so `npm publish` yields one package that
-      # installs without compiling on every supported OS/arch. Runs only on tag push
-      # and when NPM_TOKEN is configured; otherwise skipped silently.
       - name: Publish Node.js package to npm
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && env.NPM_TOKEN != ''
         shell: bash
         run: |
           set -euo pipefail
           command -v npm >/dev/null 2>&1 || { echo "::warning:: npm not found; skipping npm publish"; exit 0; }
-          # Re-pack from the already-assembled node package dir so the published
-          # tarball contains exactly the prebuilds we staged above.
           node_pkg="work/node-pkg"
           if [ ! -d "$node_pkg/prebuilds" ]; then
             echo "::error:: node prebuilds not staged; cannot publish"
@@ -873,4 +1160,3 @@ jobs:
           echo "Published @gointuition/http-client to npm registry"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
