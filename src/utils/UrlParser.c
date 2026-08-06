@@ -168,7 +168,7 @@ void appendQueryToPath(URLComponents *components) {
     if (components -> query[0] != '\0') {
         int pathLen = strlen(components -> path);
         if (pathLen > 0 && components -> path[pathLen - 1] != '/') {
-            strcat(components -> path, "/");
+            strcat(components -> path, "?");
         }
         strcat(components -> path, components -> query);
         components -> query[0] = '\0';
