@@ -130,7 +130,7 @@ endfunction()
 set(BORINGSSL_GIT_REF 9134af991b3440140812a0c1bd466cd92b9e19ec) # 0.20250818.0 series
 set(BROTLI_GIT_REF    3efb30f96ba50389c4a2fcd9f884b7dbfbadebae) # v1.1.0 (bcr.0 + 6)
 set(ZLIB_GIT_REF      v1.3.1)                                   # latest stable release
-set(JANSSON_GIT_REF   v2.14)                                    # v2.14.1 series
+set(JANSSON_GIT_REF   v2.15.1)                                  # v2.15.1 series
 set(ZSTD_GIT_REF      v1.5.7)                                   # latest stable release tag
 ############################################################
 
