@@ -1011,12 +1011,24 @@ jobs:
                 echo "::warning:: no libhttp2client shared lib found in $lib for $plat"
               fi
             fi
-            # Windows: also copy the MinGW runtime DLLs (libgcc, libstdc++, etc)
-            # and libhttp2client.dll itself.
-            for dll in "$lib"/*.dll; do
+            # Windows: the addon (MSVC) must find libhttp2client.dll + its MinGW
+            # runtime DLLs (libgcc_s_seh-1.dll, libstdc++-6.dll, libwinpthread-1.dll)
+            # in the SAME directory at load time — Node does not add other paths
+            # for the DLL chain, so a missing DLL here surfaces as ERR_DLOPEN_FAILED
+            # ("The specified module could not be found") on the consumer's machine.
+            #
+            # Prefer the node addon artifact as the source: build-addon.js already
+            # copied the version-matched DLLs into nodejs/build/Release next to the
+            # .node, so they are guaranteed to match the toolchain that built it.
+            # Fall back to the C-library artifact (lib/shared) if they are absent.
+            win_dll_srcs="$(find "$node" -maxdepth 5 -type f -name '*.dll' -path '*build/Release*' 2>/dev/null)"
+            if [ -z "$win_dll_srcs" ]; then
+              win_dll_srcs="$lib"/*.dll
+            fi
+            for dll in $win_dll_srcs; do
               [ -e "$dll" ] || continue
               cp "$dll" "$pb_dir/"
-            done 2>/dev/null || true
+            done
 
             # Java: stash each platform's fat JAR for the classifier split below.
             j="$(find "$jar" -maxdepth 1 -name '*.jar' -print -quit)"
