@@ -11,7 +11,7 @@
 - [x] **Different Versions** — Support for different browser versions, default auto 
 - [x] **Fixed Third-Party Libraries** — Pin each auto-cloned dependency to a fixed revision for reproducible builds
 - [x] **Client HelloId** — Read Client HelloId from request
-- [ ] **Log Per Request** — Not global
+- [x] **Log Per Request** — Not global
 - [ ] **Calculate Content-Length in C** — Diff from NodeJS sometimes
 - [ ] **PSK Share** — Diff proxy, diff PSK
 - [ ] **Proxy 407 Reusage** — Disable reusage if 407

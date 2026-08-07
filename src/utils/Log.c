@@ -4,8 +4,12 @@
 
 #include "Log.h"
 
-bool G_LOG_ENABLED = false;
+_Thread_local bool G_LOG_ENABLED = false;
 
 void setLogEnabled(bool enable) {
     G_LOG_ENABLED = enable;
+}
+
+bool getLogEnabled(void) {
+    return G_LOG_ENABLED;
 }

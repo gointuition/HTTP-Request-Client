@@ -85,9 +85,10 @@ Basket* buildBasket(const char *requestString) {
 
 static void parseLog(const json_t *jsonRequest) {
     json_t *log = json_object_get(jsonRequest, "log");
-    if (log != NULL && json_integer_value(log) == 1) {
-        setLogEnabled(true);
-    }
+    // Per-request logging: set the current thread's log flag from this
+    // request's "log" field. Default to off when the field is absent/malformed
+    // so logging is never leaked from a previous request on the same thread.
+    setLogEnabled(log != NULL && json_integer_value(log) == 1);
 }
 
 static void parseUrlField(Basket *basket, const json_t *jsonRequest) {

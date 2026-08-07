@@ -10,7 +10,11 @@
 #include <string.h>
 #include <time.h>
 
-extern bool G_LOG_ENABLED;
+// Per-request logging is controlled by a thread-local flag rather than a
+// process-global one. Each requesting thread handles exactly one Basket at a
+// time, so a thread-local state gives us per-request (not global) logging that
+// is also safe under HTTP/2 stream multiplexing.
+extern _Thread_local bool G_LOG_ENABLED;
 
 #define FILE_NAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 
@@ -35,6 +39,11 @@ extern bool G_LOG_ENABLED;
         } \
     } while (0)
 
+// Enable/disable logging for the *current thread* (i.e. the current request).
+// Defaults to false for every thread until explicitly enabled.
 void setLogEnabled(bool enable);
+
+// Read the current thread's logging state.
+bool getLogEnabled(void);
 
 #endif //HTTP2_LOG_H
