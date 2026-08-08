@@ -4,6 +4,7 @@
 
 #include "Basket.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 
@@ -181,10 +182,37 @@ static void parsePayload(Basket *basket, const json_t *jsonRequest) {
     if (jsonPayload != NULL) {
         // TODO JSON_INDENT, JSON_ENSURE_ASCII, JSON_SORT_KEYS, JSON_PRESERVE_ORDER, JSON_ENCODE_ANY
         basket -> request.payload = json_dumps(jsonPayload, JSON_COMPACT);
-        LOG("INFO", "payload: %s\n length: %lu", basket -> request.payload, strlen(basket -> request.payload));
+        size_t actualLen = strlen(basket -> request.payload);
+        LOG("INFO", "payload: %s\n length: %zu", basket -> request.payload, actualLen);
         if (basket -> request.containsContentLength != 1) {
             LOG("ERROR", "missing header content-length");
             basket -> error = ERR_REQUEST_PARSING_CONTENTLENGTH_FAILED;
+            return;
+        }
+
+        // content length is supplied by caller, verify it against the actual payload byte length.
+        const json_t *jsonHeaders = json_object_get(jsonRequest, "headers");
+        if (jsonHeaders != NULL && json_is_object(jsonHeaders)) {
+            const char *expectedLen = NULL;
+            const char *key;
+            json_t *value;
+            json_object_foreach(jsonHeaders, key, value) {
+                if (strcasecmp(key, "content-length") == 0) {
+                    expectedLen = json_string_value(value);
+                    break;
+                }
+            }
+            if (expectedLen != NULL) {
+                long expected = strtol(expectedLen, NULL, 10);
+                if (expected < 0 || (size_t)expected != actualLen) {
+                    LOG("ERROR", "content-length mismatch: header=%s, actual payload bytes=%zu",
+                        expectedLen, actualLen);
+                    basket -> error = ERR_REQUEST_INCORRECT_CONTENTLENGTH_MISMATCH;
+                    return;
+                }
+                LOG("DEBUG", "content length verified: header=%s, actual payload bytes=%zu",
+                    expectedLen, actualLen);
+            }
         }
     } else {
         basket -> request.payload = NULL;
