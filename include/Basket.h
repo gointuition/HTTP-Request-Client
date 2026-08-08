@@ -25,10 +25,17 @@ extern "C" {
 
 #include "openssl/ssl.h"
 
-// carries host:port through the SSL object for the new-session callback
+// carries host:port (+ proxy identity) through the SSL object for the new-session callback.
+// proxy identity is included so TLS 1.3 session resumption (pre_shared_key) is scoped per
+// proxy: a session established over one proxy must NOT be reused when connecting to the same
+// host through a different proxy.
 typedef struct {
     const char *host;
     const char *port;
+    const char *proxyScheme;
+    const char *proxyHost;
+    const char *proxyPort;
+    const char *proxyAuthorization;
 } TLSConnInfo;
 
 #define RESPONSE_HEADERS_MAX_SIZE 64

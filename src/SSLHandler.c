@@ -230,7 +230,13 @@ int newSessionCallback(SSL *ssl, SSL_SESSION *session) {
         return 0;
     }
 
-    cacheTLSSession(connInfo->host, connInfo->port, session);
-    LOG("DEBUG", "newSessionCallback: cached TLS session for %s:%s", connInfo->host, connInfo->port);
+    cacheTLSSession(connInfo->host, connInfo->port, session,
+                    connInfo->proxyScheme ? connInfo->proxyScheme : "",
+                    connInfo->proxyHost ? connInfo->proxyHost : "",
+                    connInfo->proxyPort ? connInfo->proxyPort : "",
+                    connInfo->proxyAuthorization ? connInfo->proxyAuthorization : "");
+    LOG("DEBUG", "newSessionCallback: cached TLS session for %s:%s via proxy %s://%s:%s",
+        connInfo->host, connInfo->port,
+        connInfo->proxyScheme, connInfo->proxyHost, connInfo->proxyPort);
     return 1; // we take ownership (cacheTLSSession does SSL_SESSION_up_ref internally)
 }

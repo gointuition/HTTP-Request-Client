@@ -137,10 +137,22 @@ char* handleRequest(const char *requestJSONString, int *outLen) {
                 finalizeStreamIntoBasket(basket, stream);
             }
 
-            // a connection-level GOAWAY / SETTINGS_TIMEOUT is retryable once
+            // a connection-level GOAWAY / SETTINGS_TIMEOUT is retryable once.
+            // Proxy errors (e.g. 407 authorization failed) are NOT retryable: the
+            // proxy tunnel is unusable and all sessions through it were already
+            // invalidated in handleSession(); retrying would just repeat the failure.
             const int retryable = basket -> error.code != NULL
                 && (strcmp(basket -> error.code, ERR_SESSION_SETTINGS_TIMEOUT.code) == 0
                     || strcmp(basket -> error.code, ERR_SESSION_GO_AWAY.code) == 0);
+            const int proxyError = basket -> error.code != NULL
+                && (strcmp(basket -> error.code, ERR_PROXY_AUTHORIZATION_FAILED.code) == 0
+                    || strcmp(basket -> error.code, ERR_PROXY_SOCKET_NONBLOCK_SETTING_FAILED.code) == 0
+                    || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_FAILED.code) == 0
+                    || strcmp(basket -> error.code, ERR_PROXY_SEND_CONNECT_REQUEST_FAILED.code) == 0
+                    || strcmp(basket -> error.code, ERR_PROXY_UNEXPECTED_RESPONSE.code) == 0
+                    || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_TIMEOUT.code) == 0
+                    || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_UNKNOWN_ERROR.code) == 0
+                    || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_REFUSED.code) == 0);
 
             unregisterStream(basket, stream);
 
@@ -153,6 +165,12 @@ char* handleRequest(const char *requestJSONString, int *outLen) {
                 basket -> error = ERR_NONE;
                 LOG("WARN", "session goes away, retry with a new session");
                 continue;
+            }
+            if (proxyError) {
+                // Proxy is unusable (e.g. 407). Don't retry on a fresh connection;
+                // all sessions through this proxy were already invalidated.
+                LOG("WARN", "proxy error, not retrying: %s", basket -> error.code);
+                break;
             }
             break;
         }

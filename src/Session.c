@@ -30,6 +30,12 @@
 typedef struct {
     char host[256];
     char port[8];
+    // proxy identity is part of the cache key: a TLS session resumed via
+    // pre_shared_key must be scoped to the same proxy it was established with.
+    char proxyScheme[16];
+    char proxyHost[256];
+    char proxyPort[8];
+    char proxyAuthorization[1024];
     SSL_SESSION *session;
     time_t createdAt;
 } TLSSessionCacheEntry;
@@ -38,7 +44,9 @@ static TLSSessionCacheEntry tlsSessionCache[MAX_TLS_SESSION_CACHE];
 static pthread_mutex_t tlsSessionCacheMutex;
 
 static void initTLSSessionCache(void);
-static SSL_SESSION* lookupTLSSession(const char *host, const char *port);
+static SSL_SESSION* lookupTLSSession(const char *host, const char *port,
+                                     const char *proxyScheme, const char *proxyHost,
+                                     const char *proxyPort, const char *proxyAuthorization);
 // ─────────────────────────────────────────────────────────────────────────────
 
 static SharedSessionPool pool;
@@ -69,6 +77,8 @@ static pthread_mutex_t sessionEstablishFallbackMutex = PTHREAD_MUTEX_INITIALIZER
 static void createSession(Basket *basket);
 static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * ssl, TLSConnInfo *connInfo);
 static void getSessionInfo(Basket * basket);
+static int isProxyError(Basket *basket);
+static void markProxySessionsGoingAway(Basket *basket);
 static void registerSession(Basket * basket);
 static HpackContext *initHpackContext(Basket *basket);
 static void freeHpackContext(HpackContext *ctx);
@@ -104,6 +114,13 @@ void handleSession(Basket *basket) {
         createSession(basket);
         if (basket -> session != NULL) {
             registerSession(basket);
+        } else if (isProxyError(basket)) {
+            // A 407 (proxy authorization failed) or any other proxy-level error means
+            // this proxy is currently unusable. Invalidate every pooled session that
+            // was established through the same proxy so requests don't keep reusing a
+            // dead/forbidden tunnel. See ROADMAP: "Proxy 407 Reusage — Disable reusage
+            // if 407". The reaper closes them once in-flight streams drain.
+            markProxySessionsGoingAway(basket);
         }
     }
 
@@ -402,10 +419,17 @@ static void createSession(Basket *basket) {
     // (45) is unaffected as BoringSSL sends it independently for any TLS 1.3-capable client.
     const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
     if (fp != NULL && fp -> enablePreSharedKey) {
-        SSL_SESSION *cachedSession = lookupTLSSession(basket -> request.urlComponents.host, basket -> request.urlComponents.port);
+        SSL_SESSION *cachedSession = lookupTLSSession(basket -> request.urlComponents.host,
+                                                      basket -> request.urlComponents.port,
+                                                      basket -> proxy.scheme,
+                                                      basket -> proxy.host,
+                                                      basket -> proxy.port,
+                                                      basket -> proxy.authorization);
         if (cachedSession) {
             SSL_set_session(ssl, cachedSession);
-            LOG("DEBUG", "resuming TLS session for %s:%s", basket -> request.urlComponents.host, basket -> request.urlComponents.port);
+            LOG("DEBUG", "resuming TLS session for %s:%s via proxy %s://%s:%s",
+                basket -> request.urlComponents.host, basket -> request.urlComponents.port,
+                basket -> proxy.scheme, basket -> proxy.host, basket -> proxy.port);
         }
     }
 
@@ -414,6 +438,10 @@ static void createSession(Basket *basket) {
     TLSConnInfo *connInfo = malloc(sizeof(TLSConnInfo));
     connInfo -> host = basket -> request.urlComponents.host;
     connInfo -> port = basket -> request.urlComponents.port;
+    connInfo -> proxyScheme = basket -> proxy.scheme;
+    connInfo -> proxyHost = basket -> proxy.host;
+    connInfo -> proxyPort = basket -> proxy.port;
+    connInfo -> proxyAuthorization = basket -> proxy.authorization;
     SSL_set_app_data(ssl, connInfo);
 
     int connect = SSL_connect(ssl);
@@ -903,12 +931,18 @@ void cleanupTLSSessionCache(void) {
     pthread_mutex_destroy(&tlsSessionCacheMutex);
 }
 
-static SSL_SESSION* lookupTLSSession(const char *host, const char *port) {
+static SSL_SESSION* lookupTLSSession(const char *host, const char *port,
+                                      const char *proxyScheme, const char *proxyHost,
+                                      const char *proxyPort, const char *proxyAuthorization) {
     pthread_mutex_lock(&tlsSessionCacheMutex);
     for (int i = 0; i < MAX_TLS_SESSION_CACHE; i++) {
         if (tlsSessionCache[i].session != NULL
             && strcmp(tlsSessionCache[i].host, host) == 0
-            && strcmp(tlsSessionCache[i].port, port) == 0) {
+            && strcmp(tlsSessionCache[i].port, port) == 0
+            && strcmp(tlsSessionCache[i].proxyScheme, proxyScheme) == 0
+            && strcmp(tlsSessionCache[i].proxyHost, proxyHost) == 0
+            && strcmp(tlsSessionCache[i].proxyPort, proxyPort) == 0
+            && strcmp(tlsSessionCache[i].proxyAuthorization, proxyAuthorization) == 0) {
             SSL_SESSION *session = tlsSessionCache[i].session;
             SSL_SESSION_up_ref(session);
             pthread_mutex_unlock(&tlsSessionCacheMutex);
@@ -919,19 +953,49 @@ static SSL_SESSION* lookupTLSSession(const char *host, const char *port) {
     return NULL;
 }
 
-void cacheTLSSession(const char *host, const char *port, SSL_SESSION *session) {
+// Fill a cache slot, copying the host:port + proxy identity key and taking a
+// reference on the SSL_SESSION (the caller keeps its own reference).
+static void cacheTLSSessionFillSlot(TLSSessionCacheEntry *slot,
+                                    const char *host, const char *port,
+                                    const char *proxyScheme, const char *proxyHost,
+                                    const char *proxyPort, const char *proxyAuthorization,
+                                    SSL_SESSION *session) {
+    strncpy(slot -> host, host, sizeof(slot -> host) - 1);
+    slot -> host[sizeof(slot -> host) - 1] = '\0';
+    strncpy(slot -> port, port, sizeof(slot -> port) - 1);
+    slot -> port[sizeof(slot -> port) - 1] = '\0';
+    strncpy(slot -> proxyScheme, proxyScheme, sizeof(slot -> proxyScheme) - 1);
+    slot -> proxyScheme[sizeof(slot -> proxyScheme) - 1] = '\0';
+    strncpy(slot -> proxyHost, proxyHost, sizeof(slot -> proxyHost) - 1);
+    slot -> proxyHost[sizeof(slot -> proxyHost) - 1] = '\0';
+    strncpy(slot -> proxyPort, proxyPort, sizeof(slot -> proxyPort) - 1);
+    slot -> proxyPort[sizeof(slot -> proxyPort) - 1] = '\0';
+    strncpy(slot -> proxyAuthorization, proxyAuthorization, sizeof(slot -> proxyAuthorization) - 1);
+    slot -> proxyAuthorization[sizeof(slot -> proxyAuthorization) - 1] = '\0';
+    slot -> session = session;
+    slot -> createdAt = time(NULL);
+    SSL_SESSION_up_ref(session);
+}
+
+void cacheTLSSession(const char *host, const char *port, SSL_SESSION *session,
+                     const char *proxyScheme, const char *proxyHost,
+                     const char *proxyPort, const char *proxyAuthorization) {
     pthread_mutex_lock(&tlsSessionCacheMutex);
 
     // update existing entry
     for (int i = 0; i < MAX_TLS_SESSION_CACHE; i++) {
         if (tlsSessionCache[i].session != NULL
             && strcmp(tlsSessionCache[i].host, host) == 0
-            && strcmp(tlsSessionCache[i].port, port) == 0) {
+            && strcmp(tlsSessionCache[i].port, port) == 0
+            && strcmp(tlsSessionCache[i].proxyScheme, proxyScheme) == 0
+            && strcmp(tlsSessionCache[i].proxyHost, proxyHost) == 0
+            && strcmp(tlsSessionCache[i].proxyPort, proxyPort) == 0
+            && strcmp(tlsSessionCache[i].proxyAuthorization, proxyAuthorization) == 0) {
             SSL_SESSION_free(tlsSessionCache[i].session);
-            tlsSessionCache[i].session = session;
-            tlsSessionCache[i].createdAt = time(NULL);
-            SSL_SESSION_up_ref(session);
-            LOG("DEBUG", "updated TLS session cache for %s:%s", host, port);
+            cacheTLSSessionFillSlot(&tlsSessionCache[i], host, port,
+                                    proxyScheme, proxyHost, proxyPort, proxyAuthorization, session);
+            LOG("DEBUG", "updated TLS session cache for %s:%s via proxy %s://%s:%s",
+                host, port, proxyScheme, proxyHost, proxyPort);
             pthread_mutex_unlock(&tlsSessionCacheMutex);
             return;
         }
@@ -940,14 +1004,10 @@ void cacheTLSSession(const char *host, const char *port, SSL_SESSION *session) {
     // find empty slot
     for (int i = 0; i < MAX_TLS_SESSION_CACHE; i++) {
         if (tlsSessionCache[i].session == NULL) {
-            strncpy(tlsSessionCache[i].host, host, sizeof(tlsSessionCache[i].host) - 1);
-            tlsSessionCache[i].host[sizeof(tlsSessionCache[i].host) - 1] = '\0';
-            strncpy(tlsSessionCache[i].port, port, sizeof(tlsSessionCache[i].port) - 1);
-            tlsSessionCache[i].port[sizeof(tlsSessionCache[i].port) - 1] = '\0';
-            tlsSessionCache[i].session = session;
-            tlsSessionCache[i].createdAt = time(NULL);
-            SSL_SESSION_up_ref(session);
-            LOG("DEBUG", "cached TLS session for %s:%s", host, port);
+            cacheTLSSessionFillSlot(&tlsSessionCache[i], host, port,
+                                    proxyScheme, proxyHost, proxyPort, proxyAuthorization, session);
+            LOG("DEBUG", "cached TLS session for %s:%s via proxy %s://%s:%s",
+                host, port, proxyScheme, proxyHost, proxyPort);
             pthread_mutex_unlock(&tlsSessionCacheMutex);
             return;
         }
@@ -960,15 +1020,10 @@ void cacheTLSSession(const char *host, const char *port, SSL_SESSION *session) {
             oldestIdx = i;
         }
     }
-    SSL_SESSION_free(tlsSessionCache[oldestIdx].session);
-    strncpy(tlsSessionCache[oldestIdx].host, host, sizeof(tlsSessionCache[oldestIdx].host) - 1);
-    tlsSessionCache[oldestIdx].host[sizeof(tlsSessionCache[oldestIdx].host) - 1] = '\0';
-    strncpy(tlsSessionCache[oldestIdx].port, port, sizeof(tlsSessionCache[oldestIdx].port) - 1);
-    tlsSessionCache[oldestIdx].port[sizeof(tlsSessionCache[oldestIdx].port) - 1] = '\0';
-    tlsSessionCache[oldestIdx].session = session;
-    tlsSessionCache[oldestIdx].createdAt = time(NULL);
-    SSL_SESSION_up_ref(session);
-    LOG("DEBUG", "replaced oldest TLS session cache entry for %s:%s", host, port);
+    cacheTLSSessionFillSlot(&tlsSessionCache[oldestIdx], host, port,
+                            proxyScheme, proxyHost, proxyPort, proxyAuthorization, session);
+    LOG("DEBUG", "replaced oldest TLS session cache entry for %s:%s via proxy %s://%s:%s",
+        host, port, proxyScheme, proxyHost, proxyPort);
 
     pthread_mutex_unlock(&tlsSessionCacheMutex);
 }
@@ -1002,6 +1057,57 @@ static void registerSession(Basket * basket) {
 
 
     pthread_mutex_unlock(&pool.mutex);
+}
+
+// True when the basket's error is a proxy-level failure (e.g. 407 authorization
+// failed, proxy socket/connect errors). These mean the proxy tunnel itself is
+// unusable, so any session riding that proxy must stop being reused.
+static int isProxyError(Basket *basket) {
+    if (basket -> error.code == NULL) {
+        return 0;
+    }
+    return strcmp(basket -> error.code, ERR_PROXY_AUTHORIZATION_FAILED.code) == 0
+        || strcmp(basket -> error.code, ERR_PROXY_SOCKET_NONBLOCK_SETTING_FAILED.code) == 0
+        || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_FAILED.code) == 0
+        || strcmp(basket -> error.code, ERR_PROXY_SEND_CONNECT_REQUEST_FAILED.code) == 0
+        || strcmp(basket -> error.code, ERR_PROXY_UNEXPECTED_RESPONSE.code) == 0
+        || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_TIMEOUT.code) == 0
+        || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_UNKNOWN_ERROR.code) == 0
+        || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_REFUSED.code) == 0;
+}
+
+// Mark every pooled session established through the same proxy as goingAway so
+// it is no longer handed out by getSessionInfo(). Mirrors the connection-reuse
+// key (scheme/host/port/authorization) so only the offending proxy is affected.
+static void markProxySessionsGoingAway(Basket *basket) {
+    pthread_mutex_lock(&pool.mutex);
+    int invalidated = 0;
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        Session *s = pool.sessions[i];
+        if (s == NULL || s -> magic != SESSION_MAGIC || s -> goingAway == 1) {
+            continue;
+        }
+        if (strlen(basket -> proxy.host) > 0) {
+            if (strcmp(s -> proxy.scheme, basket -> proxy.scheme) == 0
+                && strcmp(s -> proxy.host, basket -> proxy.host) == 0
+                && strcmp(s -> proxy.port, basket -> proxy.port) == 0
+                && strcmp(s -> proxy.authorization, basket -> proxy.authorization) == 0) {
+                s -> goingAway = 1;
+                invalidated++;
+            }
+        } else {
+            // no proxy configured: only invalidate direct (proxy-less) sessions
+            if (strlen(s -> proxy.host) == 0) {
+                s -> goingAway = 1;
+                invalidated++;
+            }
+        }
+    }
+    pthread_mutex_unlock(&pool.mutex);
+    if (invalidated > 0) {
+        LOG("WARN", "proxy %s://%s:%s unusable (407/auth/connect error); disabled %d pooled session(s) from reuse",
+            basket -> proxy.scheme, basket -> proxy.host, basket -> proxy.port, invalidated);
+    }
 }
 
 void initSharedSessionPool(void) {

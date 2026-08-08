@@ -9,7 +9,9 @@
 
 #include "openssl/ssl.h"
 
-void cacheTLSSession(const char *host, const char *port, SSL_SESSION *session);
+void cacheTLSSession(const char *host, const char *port, SSL_SESSION *session,
+                     const char *proxyScheme, const char *proxyHost,
+                     const char *proxyPort, const char *proxyAuthorization);
 
 #define MAX_SESSIONS 1024
 #define SESSION_MAGIC 0X55AA1234
