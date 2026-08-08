@@ -28,7 +28,8 @@
     "accept-encoding": "gzip, deflate, br, zstd",
     "accept-language": "en-US,en;q=0.9",
     "priority": "u=1",
-    "cookie": "a=123; b=456"
+    "cookie": "a=123; b=456",
+    "X-HeaderOrderKey": "host,user-agent,sec-ch-ua,sec-ch-ua-mobile,accept,sec-fetch-site,sec-fetch-mode,sec-fetch-dest,accept-encoding,accept-language,priority,cookie"
   },
 //  "proxy": {
 //    "scheme": "https",

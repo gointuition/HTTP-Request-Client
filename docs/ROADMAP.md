@@ -13,7 +13,7 @@
 - [x] **Client HelloId** — Read Client HelloId from request
 - [x] **Log Per Request** — Not global
 - [x] **Calculate Content-Length in C** — Calculate it in C, and compare with existing one, if different, log and return error
-- [ ] **Order Headers** — Via X-HeaderOrderKey
+- [x] **Order Headers** — Via HTTP Header X-HeaderOrderKey if present, and check if a header doesn't exist, return error.  
 - [x] **PSK Share** — Diff proxy, diff PSK
 - [x] **Proxy 407 Reuse** — Disable reuse if 407
 - [x] **CONNECT Timeout** — Sometimes CONNECT cost too much time

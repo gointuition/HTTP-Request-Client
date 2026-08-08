@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 
 #include "Log.h"
 
@@ -15,6 +16,7 @@
 static void initBasket(Basket * basket);
 static const char *headerValueToString(const json_t *jsonValue, char *buffer, size_t bufferSize);
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders);
+static void reorderHeadersByOrderKey(Basket *basket);
 static size_t processCookies(RequestHeader *headers, size_t idx, const char *cookie, const int calculateCookieCount, int headerValueMaxLength);
 static void parseLog(const json_t *jsonRequest);
 static void parseUrlField(Basket *basket, const json_t *jsonRequest);
@@ -196,7 +198,7 @@ static void parsePayload(Basket *basket, const json_t *jsonRequest) {
             const char *expectedLen = NULL;
             const char *key;
             json_t *value;
-            json_object_foreach(jsonHeaders, key, value) {
+            json_object_foreach((json_t *) jsonHeaders, key, value) {
                 if (strcasecmp(key, "content-length") == 0) {
                     expectedLen = json_string_value(value);
                     break;
@@ -384,6 +386,134 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     }
 
     basket -> request.numHeaders = idx;
+
+    if (basket -> error.code == NULL) {
+        reorderHeadersByOrderKey(basket);
+    }
+}
+
+// Case-insensitive comparison of two header names.
+static int headerNameEquals(const char *a, const char *b) {
+    return strcasecmp(a, b) == 0;
+}
+
+static void reorderHeadersByOrderKey(Basket *basket) {
+    Request *req = &basket -> request;
+    const size_t n = req -> numHeaders;
+    if (n == 0) {
+        return;
+    }
+
+    // Locate the X-HeaderOrderKey header (case-insensitive).
+    int orderIdx = -1;
+    for (size_t i = 0; i < n; i++) {
+        if (!req -> headers[i].isPseudo &&
+            headerNameEquals(req -> headers[i].name, "X-HeaderOrderKey")) {
+            orderIdx = (int) i;
+            break;
+        }
+    }
+    if (orderIdx < 0) {
+        return; // No ordering requested.
+    }
+
+    // Parse the order-key value (comma-separated header-name list) into `keys`.
+    const char *raw = req -> headers[orderIdx].value;
+    size_t cap = 1;
+    for (const char *p = raw; *p; p++) {
+        if (*p == ',') {
+            cap++;
+        }
+    }
+    char **keys = malloc(cap * sizeof(char *));
+    size_t keyCount = 0;
+    const char *start = raw;
+    const char *end = raw;
+    while (1) {
+        if (*end == ',' || *end == '\0') {
+            size_t len = (size_t) (end - start);
+            while (len > 0 && isspace((unsigned char) start[0])) { start++; len--; }
+            while (len > 0 && isspace((unsigned char) start[len - 1])) { len--; }
+            if (len > 0) {
+                char *k = malloc(len + 1);
+                memcpy(k, start, len);
+                k[len] = '\0';
+                keys[keyCount++] = k;
+            }
+            if (*end == '\0') {
+                break;
+            }
+            start = end + 1;
+        }
+        end++;
+    }
+
+    int *matched = calloc(n, sizeof(int));
+
+    // Error if any real (non-pseudo, non-order-key) header is missing from the
+    // ordered list.
+    for (size_t i = 0; i < n; i++) {
+        if (req -> headers[i].isPseudo || (int) i == orderIdx) {
+            continue;
+        }
+        int listed = 0;
+        for (size_t k = 0; k < keyCount; k++) {
+            if (headerNameEquals(req -> headers[i].name, keys[k])) {
+                listed = 1;
+                break;
+            }
+        }
+        if (!listed) {
+            LOG("ERROR", "header not listed in X-HeaderOrderKey: %s", req -> headers[i].name);
+            basket -> error = ERR_REQUEST_HEADER_ORDER_KEY_MISSING_HEADER;
+            break;
+        }
+    }
+
+    if (basket -> error.code != NULL) {
+        free(matched);
+        for (size_t k = 0; k < keyCount; k++) {
+            free(keys[k]);
+        }
+        free(keys);
+        return;
+    }
+
+    RequestHeader *ordered = malloc(n * sizeof(RequestHeader));
+    size_t out = 0;
+
+    // Pseudo headers first, in their original order.
+    for (size_t i = 0; i < n; i++) {
+        if (req -> headers[i].isPseudo) {
+            ordered[out++] = req -> headers[i];
+        }
+    }
+
+    // Then the real headers, in the exact order given by X-HeaderOrderKey.
+    for (size_t k = 0; k < keyCount; k++) {
+        for (size_t i = 0; i < n; i++) {
+            if (req -> headers[i].isPseudo || (int) i == orderIdx || matched[i]) {
+                continue;
+            }
+            if (headerNameEquals(req -> headers[i].name, keys[k])) {
+                ordered[out++] = req -> headers[i];
+                matched[i] = 1;
+                break;
+            }
+        }
+    }
+
+    free(matched);
+    for (size_t k = 0; k < keyCount; k++) {
+        free(keys[k]);
+    }
+    free(keys);
+
+    // The old array only holds pointers to jansson / strdup'd strings; the
+    // strings are not owned by the array itself, so free the array only.
+    free(req -> headers);
+    req -> headers = ordered;
+    req -> numHeaders = out;
 }
 
 // Convert a scalar JSON value (string, integer, real, boolean) to its string
