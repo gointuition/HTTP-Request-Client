@@ -27,10 +27,13 @@
     #define SOCKET_LAST_ERROR    WSAGetLastError()
     #define SOCKET_EINPROGRESS   WSAEWOULDBLOCK
     #define SOCKET_ECONNREFUSED  WSAECONNREFUSED
+    // Winsock reports a recv() that hit its SO_RCVTIMEO as WSAETIMEDOUT.
+    #define SOCKET_EAGAIN        WSAETIMEDOUT
 
 #else
 
     #include <sys/socket.h>
+    #include <sys/types.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
     #include <netdb.h>
@@ -42,6 +45,8 @@
     #define SOCKET_LAST_ERROR    errno
     #define SOCKET_EINPROGRESS   EINPROGRESS
     #define SOCKET_ECONNREFUSED  ECONNREFUSED
+    // POSIX reports a recv() that hit its SO_RCVTIMEO as EAGAIN/EWOULDBLOCK.
+    #define SOCKET_EAGAIN        EAGAIN
 
 #endif
 
@@ -66,6 +71,36 @@ static inline int setSocketBlocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) { return -1; }
     return fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+#endif
+}
+
+// Set a timeout (in milliseconds) on blocking recv() calls. A proxy CONNECT
+// exchange must never block forever waiting for the proxy's response, so every
+// socket that performs a blocking recv() during tunnel establishment gets a
+// receive timeout. Returns 0 on success, -1 on error.
+static inline int setSocketReceiveTimeout(int fd, int timeoutInMillis) {
+#ifdef _WIN32
+    DWORD tv = timeoutInMillis < 0 ? 0 : (DWORD) timeoutInMillis;
+    return setsockopt((SOCKET) fd, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof(tv)) == 0 ? 0 : -1;
+#else
+    struct timeval tv;
+    tv.tv_sec = timeoutInMillis / 1000;
+    tv.tv_usec = timeoutInMillis % 1000 * 1000; // tv_usec must stay < 1e6
+    return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0 ? 0 : -1;
+#endif
+}
+
+// Set a timeout (in milliseconds) on blocking send() calls, mirroring the
+// receive-side helper above.
+static inline int setSocketSendTimeout(int fd, int timeoutInMillis) {
+#ifdef _WIN32
+    DWORD tv = timeoutInMillis < 0 ? 0 : (DWORD) timeoutInMillis;
+    return setsockopt((SOCKET) fd, SOL_SOCKET, SO_SNDTIMEO, (const char *) &tv, sizeof(tv)) == 0 ? 0 : -1;
+#else
+    struct timeval tv;
+    tv.tv_sec = timeoutInMillis / 1000;
+    tv.tv_usec = timeoutInMillis % 1000 * 1000; // tv_usec must stay < 1e6
+    return setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == 0 ? 0 : -1;
 #endif
 }
 

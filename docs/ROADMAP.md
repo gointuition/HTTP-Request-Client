@@ -13,6 +13,6 @@
 - [x] **Client HelloId** — Read Client HelloId from request
 - [x] **Log Per Request** — Not global
 - [ ] **Calculate Content-Length in C** — Diff from NodeJS sometimes
-- [ ] **PSK Share** — Diff proxy, diff PSK
-- [ ] **Proxy 407 Reusage** — Disable reusage if 407
+- [x] **PSK Share** — Diff proxy, diff PSK
+- [x] **Proxy 407 Reusage** — Disable reusage if 407
 - [ ] **CONNECT Timeout** — Sometimes CONNECT cost too much time

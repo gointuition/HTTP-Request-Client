@@ -444,6 +444,23 @@ static void createSession(Basket *basket) {
     connInfo -> proxyAuthorization = basket -> proxy.authorization;
     SSL_set_app_data(ssl, connInfo);
 
+    // Bound the TLS handshake so a server that accepts the TCP/Proxy CONNECT
+    // connection but never completes the handshake cannot hang this thread
+    // forever. BoringSSL drives the blocking socket via read()/write(), which
+    // are subject to SO_RCVTIMEO/SO_SNDTIMEO; a timeout makes SSL_connect return
+    // with SSL_ERROR_SYSCALL and EAGAIN below. These timeouts are cleared once
+    // the handshake succeeds (below) so they never leak into HTTP/2 transfer.
+    // See ROADMAP: "CONNECT Timeout".
+    if (setSocketReceiveTimeout(sockfd, basket -> connectTimeoutInMilliseconds) < 0
+        || setSocketSendTimeout(sockfd, basket -> connectTimeoutInMilliseconds) < 0) {
+        LOG("ERROR", "failed to set socket timeout for TLS handshake");
+        SSL_set_app_data(ssl, NULL);
+        free(connInfo);
+        freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
+        basket -> error = ERR_SESSION_SSL_CONNECT_FAILED;
+        return;
+    }
+
     int connect = SSL_connect(ssl);
 
     if (connect != 1) {
@@ -461,7 +478,11 @@ static void createSession(Basket *basket) {
         free(connInfo);
         freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
 
-        if (sslError == SSL_ERROR_SYSCALL) {
+        if (sslError == SSL_ERROR_SYSCALL && savedErrno == SOCKET_EAGAIN) {
+            // SO_RCVTIMEO/SO_SNDTIMEO elapsed during the handshake: the server
+            // never completed it within connectTimeoutInMilliseconds.
+            LOG("ERROR", "SSL_connect failed: TLS handshake timed out after %d ms", basket -> connectTimeoutInMilliseconds);
+        } else if (sslError == SSL_ERROR_SYSCALL) {
             // no entry in the error queue by design: connection reset / EOF during handshake
             LOG("ERROR", "SSL_connect failed: SSL_ERROR_SYSCALL, %s (errno: %d)", strerror(savedErrno), savedErrno);
         } else {
@@ -482,6 +503,20 @@ static void createSession(Basket *basket) {
         freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
 
         LOG("ERROR", "ALPN negotiation failed");
+        basket -> error = ERR_SESSION_SSL_CONNECT_FAILED;
+        return;
+    }
+
+    // Handshake done. Clear the connect-time SO_RCVTIMEO/SO_SNDTIMEO (0 == no
+    // timeout) so the socket goes back to fully-blocking for HTTP/2 transfer:
+    // the reader thread's SSL_read and the request threads' SSL_write must not
+    // be re-triggered by connectTimeout once the connection is established.
+    if (setSocketReceiveTimeout(sockfd, 0) < 0
+        || setSocketSendTimeout(sockfd, 0) < 0) {
+        LOG("ERROR", "failed to clear socket timeout after TLS handshake");
+        SSL_set_app_data(ssl, NULL);
+        free(connInfo);
+        freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
         basket -> error = ERR_SESSION_SSL_CONNECT_FAILED;
         return;
     }

@@ -82,6 +82,22 @@ int createSocket(Basket *basket, const char *host, const char *port, int isProxy
 }
 
 static int connectToProxy(Basket *basket, int sockfd) {
+    // The socket is back in blocking mode here (connectWithTimeout restored it),
+    // so send()/recv() below would otherwise block forever if the proxy never
+    // answered. Bound both with connectTimeoutInMilliseconds so a silent/slow
+    // proxy can no longer hang the whole CONNECT tunnel. See ROADMAP: "CONNECT
+    // Timeout".
+    if (setSocketSendTimeout(sockfd, basket -> connectTimeoutInMilliseconds) < 0) {
+        LOG("ERROR", "failed to set socket send timeout for CONNECT");
+        basket -> error = ERR_PROXY_SOCKET_NONBLOCK_SETTING_FAILED;
+        return -1;
+    }
+    if (setSocketReceiveTimeout(sockfd, basket -> connectTimeoutInMilliseconds) < 0) {
+        LOG("ERROR", "failed to set socket receive timeout for CONNECT");
+        basket -> error = ERR_PROXY_SOCKET_NONBLOCK_SETTING_FAILED;
+        return -1;
+    }
+
     const char *userAgent = getUserAgent(basket);
     char connectRequest[1024];
     int requestLen;
@@ -124,10 +140,23 @@ static int connectToProxy(Basket *basket, int sockfd) {
 
     // read proxy response
     char proxyResponse[1024];
-    const size_t bytesRead = recv(sockfd, proxyResponse, sizeof(proxyResponse) - 1, 0);
+    // recv() returns ssize_t; using a signed type is required so a -1 (timeout
+    // or socket error) is not promoted to a huge unsigned value that would pass
+    // the <= 0 check below.
+    const ssize_t bytesRead = recv(sockfd, proxyResponse, sizeof(proxyResponse) - 1, 0);
     if (bytesRead <= 0) {
-        LOG("ERROR", "recv() failed when sending CONNECT request to proxy");
-        basket -> error = ERR_PROXY_SEND_CONNECT_REQUEST_FAILED;
+        if (bytesRead == 0) {
+            // proxy closed the connection without answering the CONNECT request
+            LOG("ERROR", "proxy closed the connection before answering CONNECT");
+            basket -> error = ERR_PROXY_EMPTY_RESPONSE;
+        } else if (SOCKET_LAST_ERROR == SOCKET_EAGAIN) {
+            // SO_RCVTIMEO elapsed: the proxy neither answered nor closed
+            LOG("ERROR", "proxy CONNECT response timed out after %d ms", basket -> connectTimeoutInMilliseconds);
+            basket -> error = ERR_PROXY_SOCKET_CONNECTING_TIMEOUT;
+        } else {
+            LOG("ERROR", "recv() failed when reading CONNECT response: %s (errno: %d)", strerror(SOCKET_LAST_ERROR), SOCKET_LAST_ERROR);
+            basket -> error = ERR_PROXY_SEND_CONNECT_REQUEST_FAILED;
+        }
         return -1;
     }
 
@@ -135,7 +164,7 @@ static int connectToProxy(Basket *basket, int sockfd) {
     strncpy(basket -> proxy.response, proxyResponse, sizeof(basket -> proxy.response) - 1);
     basket -> proxy.response[sizeof(basket -> proxy.response) - 1] = '\0';
     LOG("DEBUG", "proxy response: %s", proxyResponse);
-    LOG("DEBUG", "proxy response size: %zu", bytesRead);
+    LOG("DEBUG", "proxy response size: %zd", bytesRead);
 
     // check proxy response
     if (strstr(proxyResponse, "HTTP/1.0 407") != NULL || strstr(proxyResponse, "HTTP/1.1 407") != NULL) {
