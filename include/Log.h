@@ -14,6 +14,12 @@
 // process-global one. Each requesting thread handles exactly one Basket at a
 // time, so a thread-local state gives us per-request (not global) logging that
 // is also safe under HTTP/2 stream multiplexing.
+//
+// NOTE: the thread-local itself lives in the shared library (Log.c). The LOG
+// macro must NOT reference it directly, because thread-local symbols are not
+// exported across DLL boundaries on Windows and that breaks test executables
+// which link against the DLL import lib. Instead the macro calls
+// getLogEnabled(), a normal exported function that reads the thread-local.
 extern _Thread_local bool G_LOG_ENABLED;
 
 #define FILE_NAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
@@ -23,7 +29,7 @@ extern _Thread_local bool G_LOG_ENABLED;
 
 #define LOG(level, fmt, ...) \
     do { \
-        if (G_LOG_ENABLED) { \
+        if (getLogEnabled()) { \
             char time_str[32]; \
             char prefix[64]; \
             /* 跨平台获取时间 */ \
