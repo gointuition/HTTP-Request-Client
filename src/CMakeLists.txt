@@ -34,6 +34,14 @@ set_target_properties(${HTTP2_CLIENT} PROPERTIES
         POSITION_INDEPENDENT_CODE ON
 )
 
+# ── Size optimization: split each function/data into its own section so the
+#    linker can discard unused code (BoringSSL/Brotli/Zstd pull in a lot we
+#    never call). Paired with -Wl,--gc-sections / -Wl,-dead_strip below.
+target_compile_options(${HTTP2_CLIENT} PRIVATE
+        $<$<CONFIG:Release>:-ffunction-sections -fdata-sections>
+        $<$<CONFIG:RelWithDebInfo>:-ffunction-sections -fdata-sections>
+)
+
 # include third parties headers
 target_include_directories(${HTTP2_CLIENT} PRIVATE
         ${BORINGSSL_DIR}/include
@@ -66,6 +74,31 @@ target_link_libraries(${HTTP2_CLIENT} PRIVATE
 
 # threading + platform-specific system libraries
 target_link_libraries(${HTTP2_CLIENT} PRIVATE Threads::Threads)
+
+# ── Dead-code stripping: drop unused sections pulled in by the static
+#    third-party libs (BoringSSL crypto, Brotli, Zstd, ...).
+#    macOS/ld uses -dead_strip; GNU ld/gold/lld use --gc-sections.
+if (APPLE)
+    target_link_options(${HTTP2_CLIENT} PRIVATE
+            $<$<CONFIG:Release>:-Wl,-dead_strip>
+            $<$<CONFIG:RelWithDebInfo>:-Wl,-dead_strip>
+    )
+elseif (NOT WIN32)
+    target_link_options(${HTTP2_CLIENT} PRIVATE
+            $<$<CONFIG:Release>:-Wl,--gc-sections>
+            $<$<CONFIG:RelWithDebInfo>:-Wl,--gc-sections>
+    )
+endif ()
+
+# ── Strip symbols from the final shared library in Release builds to shrink
+#    the shipped artifact (the 4.1 MB dylib contains a full symbol table).
+#    macOS uses -x (or `strip -x`); GNU uses -s. Skipped on Windows (MinGW
+#    keeps its runtime DLLs; the addon loads them separately).
+if (APPLE)
+    target_link_options(${HTTP2_CLIENT} PRIVATE $<$<CONFIG:Release>:-Wl,-x>)
+elseif (NOT WIN32)
+    target_link_options(${HTTP2_CLIENT} PRIVATE $<$<CONFIG:Release>:-Wl,-s>)
+endif ()
 
 # Windows: link the Winsock2 socket library
 if (WIN32)

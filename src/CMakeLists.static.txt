@@ -14,6 +14,15 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${LIB_PATH})
 # generate lib
 add_library(${HTTP2_CLIENT} STATIC ${SRC})
 
+# ── Split each function/data into its own section so a downstream executable
+#    linking this static archive can discard unused code with
+#    -Wl,--gc-sections / -Wl,-dead_strip (the bundled third-party libs pull in
+#    a lot we never call, e.g. most of BoringSSL's cipher suite).
+target_compile_options(${HTTP2_CLIENT} PRIVATE
+        $<$<CONFIG:Release>:-ffunction-sections -fdata-sections>
+        $<$<CONFIG:RelWithDebInfo>:-ffunction-sections -fdata-sections>
+)
+
 # set output name and ensure it goes to the correct directory
 set_target_properties(${HTTP2_CLIENT} PROPERTIES
         OUTPUT_NAME ${HTTP2_CLIENT}

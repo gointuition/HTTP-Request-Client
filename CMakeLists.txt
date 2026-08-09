@@ -149,6 +149,10 @@ apply_third_party_patches(boringssl ${BORINGSSL_DIR})
 # test suite (crypto_test/ssl_test), which fails to compile under some
 # toolchains (e.g. MinGW-w64) and is irrelevant to this project.
 set(BUILD_TESTING OFF CACHE BOOL "Build the testing tree" FORCE)
+# NOTE: OPENSSL_SMALL is intentionally left OFF. Its compact ML-KEM
+# implementation breaks SSL_connect when the post-quantum group
+# X25519MLKEM768 is advertised (internal error in the EC routines), so we
+# keep the full, optimized BoringSSL build to preserve the PQ fingerprint.
 add_subdirectory(${BORINGSSL_DIR})
 
 ##### Boringssl end

@@ -17,3 +17,4 @@
 - [x] **PSK Share** — Diff proxy, diff PSK
 - [x] **Proxy 407 Reuse** — Disable reuse if 407
 - [x] **CONNECT Timeout** — Sometimes CONNECT cost too much time
+- [ ] **Non-Blocking Mode** — 
