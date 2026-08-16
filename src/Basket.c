@@ -633,7 +633,7 @@ void freeBasket(Basket *basket) {
     }
     // free url
     if (basket -> url != NULL) {
-        LOG("DEBUG", "free basket -> url");
+//        LOG("DEBUG", "free basket -> url");
         free((void *) basket -> url);
     }
     // free method
@@ -648,48 +648,48 @@ void freeBasket(Basket *basket) {
     if (basket -> request.headers != NULL) {
         for (size_t i = 0; i < basket -> request.numHeaders; i++) {
             if (basket -> request.headers[i].freeName == 1 && basket -> request.headers[i].name != NULL) {
-                LOG("DEBUG", "free basket -> request.header[%zu].name  > %s", i, basket -> request.headers[i].name);
+//                LOG("DEBUG", "free basket -> request.header[%zu].name  > %s", i, basket -> request.headers[i].name);
                 free((void *) basket -> request.headers[i].name);
                 basket -> request.headers[i].name = NULL;
             }
             if (basket -> request.headers[i].freeValue == 1 && basket -> request.headers[i].value != NULL) {
-                LOG("DEBUG", "free basket -> request.header[%zu].value > %s", i, basket -> request.headers[i].value);
+//                LOG("DEBUG", "free basket -> request.header[%zu].value > %s", i, basket -> request.headers[i].value);
                 free((void *) basket -> request.headers[i].value);
                 basket -> request.headers[i].value = NULL;
             }
         }
-        LOG("DEBUG", "free basket -> request.headers");
+//        LOG("DEBUG", "free basket -> request.headers");
         free(basket -> request.headers);
     }
     // free request payload
     if (basket -> request.payload != NULL) {
-        LOG("DEBUG", "free basket -> request.payload");
+//        LOG("DEBUG", "free basket -> request.payload");
         free(basket -> request.payload);
     }
     // free response headers
     if (basket -> response.headers != NULL) {
         for (size_t i = 0; i < basket -> response.numHeaders; i++) {
             if (basket -> response.headers[i].freeName == 1 && basket -> response.headers[i].name != NULL) {
-                LOG("DEBUG", "free basket -> response.header[%zu].name  > %s", i, basket -> response.headers[i].name);
+//                LOG("DEBUG", "free basket -> response.header[%zu].name  > %s", i, basket -> response.headers[i].name);
                 free(basket -> response.headers[i].name);
                 basket -> response.headers[i].name = NULL;
             }
             if (basket -> response.headers[i].freeValue == 1 && basket -> response.headers[i].value != NULL) {
-                LOG("DEBUG", "free basket -> response.header[%zu].value > %s", i, basket -> response.headers[i].value);
+//                LOG("DEBUG", "free basket -> response.header[%zu].value > %s", i, basket -> response.headers[i].value);
                 free(basket -> response.headers[i].value);
                 basket -> response.headers[i].value = NULL;
             }
         }
-        LOG("DEBUG", "free basket -> response.headers");
+//        LOG("DEBUG", "free basket -> response.headers");
         free(basket -> response.headers);
     }
 
     if (basket -> response.payload != NULL) {
-        LOG("DEBUG", "free basket -> response.payload");
+//        LOG("DEBUG", "free basket -> response.payload");
         free(basket -> response.payload);
     }
     free(basket);
-    LOG("DEBUG", "free basket");
+//    LOG("DEBUG", "free basket");
 }
 
 char* basketToString(Basket *basket, int *outLen) {
