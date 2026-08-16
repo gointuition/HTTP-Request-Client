@@ -13,16 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#define sleepMs(ms) Sleep(ms)
-#else
-#include <unistd.h>
-#define sleepMs(ms) usleep((ms) * 1000)
-#endif
-
 #include "jansson.h"
 
+#include "Compat.h"
 #include "File.h"
 #include "Http2Client.h"
 #include "Log.h"
@@ -145,19 +138,19 @@ int main(int argc, char *argv[]) {
             pending--;
 
             if (status == 1 && result != NULL && outLen > 0) {
-                char *basketStr = malloc(outLen + 1);
-                if (basketStr == NULL) {
+                char *dest = malloc(outLen + 1);
+                if (dest == NULL) {
                     free(result);
                     failed++;
                     ids[i] = 0;
                     continue;
                 }
-                getBasketContent(result, basketStr); // frees result
-                basketStr[outLen] = '\0';
+                getBasketContent(result, dest); // copies into dest and frees result
+                dest[outLen] = '\0';
 
-                if (validateBasket(basketStr)) {
+                if (validateBasket(dest)) {
                     // extract stream id for the summary
-                    json_t *root = json_loads(basketStr, 0, NULL);
+                    json_t *root = json_loads(dest, 0, NULL);
                     int streamId = -1;
                     if (root != NULL) {
                         json_t *session = json_object_get(root, "session");
@@ -173,7 +166,7 @@ int main(int argc, char *argv[]) {
                     printf("  #%d FAILED (invalid response)\n", i);
                     failed++;
                 }
-                free(basketStr);
+                free(dest);
             } else {
                 printf("  #%d FAILED (status=%d)\n", i, status);
                 if (result != NULL) {
@@ -184,7 +177,7 @@ int main(int argc, char *argv[]) {
             ids[i] = 0; // mark reaped
         }
         if (pending > 0) {
-            sleepMs(5);
+            sleepMicroseconds(5000);
         }
     }
 
