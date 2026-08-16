@@ -237,6 +237,8 @@ static void parseOptions(Basket *basket, const json_t *jsonRequest) {
     json_t *nonBlocking = json_object_get(jsonRequest, "non-blocking");
     if (nonBlocking != NULL) {
         basket -> nonBlocking = json_integer_value(nonBlocking) != 0 ? 1 : 0;
+    } else {
+        basket -> nonBlocking = 1;
     }
 }
 
@@ -293,7 +295,7 @@ void initBasket(Basket * basket) {
     basket -> responseReadingTimeoutInMilliseconds = 20000;
 
     basket -> decompress = 1;
-    basket -> nonBlocking = 0;
+    basket -> nonBlocking = 1;
 }
 
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
