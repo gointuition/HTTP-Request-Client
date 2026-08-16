@@ -33,6 +33,22 @@ JNIEXPORT jstring JNICALL Java_Http2Client_nativeRequest
 JNIEXPORT void JNICALL Java_Http2Client_nativeCleanup
   (JNIEnv *, jclass);
 
+/*
+ * Class:     Http2Client
+ * Method:    nativeStartRequest
+ * Signature: (Ljava/lang/String;)J
+ */
+JNIEXPORT jlong JNICALL Java_Http2Client_nativeStartRequest
+  (JNIEnv *, jclass, jstring);
+
+/*
+ * Class:     Http2Client
+ * Method:    nativePollRequest
+ * Signature: (J)[Ljava/lang/Object;
+ */
+JNIEXPORT jobjectArray JNICALL Java_Http2Client_nativePollRequest
+  (JNIEnv *, jclass, jlong);
+
 #ifdef __cplusplus
 }
 #endif

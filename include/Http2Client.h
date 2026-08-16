@@ -48,6 +48,26 @@ char* handleRequest(const char *requestJSONString, int *outLen);
 
 void getBasketContent(char *basketStr, char *dest);
 
+// ─── Non-blocking / async request API ───
+// Start a request (must carry "non-blocking": 1) without waiting for the
+// response. Returns a positive request id to poll, or 0 on failure.
+long handleRequestAsync(const char *requestJSONString);
+
+// Poll an async request. Sets *outStatus to 0 (in flight), 1 (completed) or -1
+// (failed/timed out), and *outLen to the length of the returned JSON string.
+// Returns a malloc'd response JSON string only on completion (caller frees it);
+// otherwise returns NULL. On completion the id is reclaimed.
+char* pollRequest(long requestId, int *outStatus, int *outLen);
+
+// Reap all in-flight async requests (call at shutdown).
+void cleanupAsyncRequests(void);
+
+// Prepare + send a request into a registered stream without waiting for the
+// response. On success returns 0 and sets *outStream; the caller owns both the
+// basket and the stream (used by the async request registry). On failure
+// returns -1 and basket->error is set.
+int http2StartRequest(Basket *basket, Stream **outStream);
+
 #ifdef __cplusplus
 }
 #endif

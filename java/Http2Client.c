@@ -26,6 +26,8 @@ extern void initialiseEnv(void);
 extern void cleanupEnv(void);
 extern char* handleRequest(const char *requestJSONString, int *outLen);
 extern void getBasketContent(char *basketStr, char *dest);
+extern long handleRequestAsync(const char *requestJSONString);
+extern char* pollRequest(long requestId, int *outStatus, int *outLen);
 
 /* Buffer size must match Http2Client.java BUFFER_SIZE (1 MB) */
 #define BRIDGE_BUFFER_SIZE (1024 * 1024)
@@ -91,4 +93,89 @@ JNIEXPORT void JNICALL Java_Http2Client_nativeCleanup(JNIEnv *env, jclass cls) {
     (void)env;
     (void)cls;
     cleanupEnv();
+}
+
+/*
+ * Class:     Http2Client
+ * Method:    nativeStartRequest
+ * Signature: (Ljava/lang/String;)J
+ *
+ * Non-blocking request: sends HEADERS/DATA and returns immediately with a
+ * request id (0 = start failed). Mirrors handleRequestAsync().
+ */
+JNIEXPORT jlong JNICALL Java_Http2Client_nativeStartRequest(JNIEnv *env, jclass cls, jstring requestJson) {
+    (void)cls;
+
+    const char *requestStr = (*env)->GetStringUTFChars(env, requestJson, NULL);
+    if (requestStr == NULL) {
+        return 0; /* OutOfMemoryError already thrown by JVM */
+    }
+
+    long id = handleRequestAsync(requestStr);
+    (*env)->ReleaseStringUTFChars(env, requestJson, requestStr);
+
+    return (jlong) id;
+}
+
+/*
+ * Class:     Http2Client
+ * Method:    nativePollRequest
+ * Signature: (J)[Ljava/lang/Object;
+ *
+ * Poll a non-blocking request. Returns an Object[2]:
+ *   [0] = Integer status (0 = in flight, 1 = completed, -1 = failed/timeout)
+ *   [1] = String  response JSON (only when status != 0), or null
+ */
+JNIEXPORT jobjectArray JNICALL Java_Http2Client_nativePollRequest(JNIEnv *env, jclass cls, jlong requestId) {
+    (void)cls;
+
+    int status = 0;
+    int outLen = 0;
+    char *result = pollRequest((long) requestId, &status, &outLen);
+
+    /* Build Object[]{ Integer status, String data|null } */
+    jclass objectClass = (*env)->FindClass(env, "java/lang/Object");
+    if (objectClass == NULL) {
+        if (result != NULL) free(result);
+        return NULL;
+    }
+    jobjectArray arr = (*env)->NewObjectArray(env, 2, objectClass, NULL);
+    if (arr == NULL) {
+        if (result != NULL) free(result);
+        return NULL;
+    }
+
+    jclass integerClass = (*env)->FindClass(env, "java/lang/Integer");
+    if (integerClass != NULL) {
+        jmethodID ctor = (*env)->GetMethodID(env, integerClass, "<init>", "(I)V");
+        if (ctor != NULL) {
+            jobject statusObj = (*env)->NewObject(env, integerClass, ctor, (jint) status);
+            if (statusObj != NULL) {
+                (*env)->SetObjectArrayElement(env, arr, 0, statusObj);
+                (*env)->DeleteLocalRef(env, statusObj);
+            }
+        }
+        (*env)->DeleteLocalRef(env, integerClass);
+    }
+
+    if (result != NULL && outLen > 0) {
+        if (outLen >= BRIDGE_BUFFER_SIZE) {
+            outLen = BRIDGE_BUFFER_SIZE - 1;
+        }
+        char *buffer = malloc(outLen + 1);
+        if (buffer != NULL) {
+            getBasketContent(result, buffer); /* copies into buffer and frees result */
+            buffer[outLen] = '\0';
+            jstring dataStr = (*env)->NewStringUTF(env, buffer);
+            free(buffer);
+            if (dataStr != NULL) {
+                (*env)->SetObjectArrayElement(env, arr, 1, dataStr);
+                (*env)->DeleteLocalRef(env, dataStr);
+            }
+        } else {
+            free(result);
+        }
+    }
+
+    return arr;
 }

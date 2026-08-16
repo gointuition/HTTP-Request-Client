@@ -282,14 +282,15 @@ void freeSession(SSL* ssl, SSL_CTX* ctx, int sockfd, HpackContext *hpackCtx, Err
 // include exactly the fields getSessionInfo() matches on, so two requests share
 // a lock iff they would share a session.
 static void buildSessionKey(Basket *basket, char *key, size_t size) {
-    snprintf(key, size, "%s://%s:%s#%s://%s:%s@%s",
+    snprintf(key, size, "%s://%s:%s#%s://%s:%s@%s|nb=%d",
              basket -> request.urlComponents.scheme,
              basket -> request.urlComponents.host,
              basket -> request.urlComponents.port,
              basket -> proxy.scheme,
              basket -> proxy.host,
              basket -> proxy.port,
-             basket -> proxy.authorization);
+             basket -> proxy.authorization,
+             basket -> nonBlocking);
 }
 
 // Find-or-create the per-target lock, take a reference, and lock it. Returns
@@ -362,6 +363,7 @@ static void getSessionInfo(Basket * basket) {
             && strcmp(pool.sessions[i] -> proxy.host, basket -> proxy.host) == 0
             && strcmp(pool.sessions[i] -> proxy.port, basket -> proxy.port) == 0
             && strcmp(pool.sessions[i] -> proxy.authorization, basket -> proxy.authorization) == 0
+            && pool.sessions[i] -> nonBlocking == basket -> nonBlocking
                 ) {
             const int connecting = isConnecting(pool.sessions[i]);
             if (connecting == 1) {
@@ -508,7 +510,7 @@ static void createSession(Basket *basket) {
     }
 
     // Handshake done. Clear the connect-time SO_RCVTIMEO/SO_SNDTIMEO (0 == no
-    // timeout) so the socket goes back to fully-blocking for HTTP/2 transfer:
+    // timeout) so those timeouts never leak into the HTTP/2 transfer phase:
     // the reader thread's SSL_read and the request threads' SSL_write must not
     // be re-triggered by connectTimeout once the connection is established.
     if (setSocketReceiveTimeout(sockfd, 0) < 0
@@ -519,6 +521,23 @@ static void createSession(Basket *basket) {
         freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
         basket -> error = ERR_SESSION_SSL_CONNECT_FAILED;
         return;
+    }
+
+    // Select the socket I/O mode for the HTTP/2 transfer phase. Blocking is the
+    // default (the reader thread gates each SSL_read behind select(), the write
+    // path relies on fully-blocking SSL_write). When the request sets
+    // "non-blocking": 1, the socket is left in non-blocking mode and the
+    // reader/writer must poll for readability/writability and retry on
+    // SSL_ERROR_WANT_READ / SSL_ERROR_WANT_WRITE.
+    if (basket -> nonBlocking) {
+        if (setSocketNonBlocking(sockfd) < 0) {
+            LOG("ERROR", "failed to set socket non-blocking after TLS handshake");
+            SSL_set_app_data(ssl, NULL);
+            free(connInfo);
+            freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
+            basket -> error = ERR_SESSION_SOCKET_NONBLOCK_SETTING_FAILED;
+            return;
+        }
     }
 
     // establish HTTP/2 transport, send Settings frame
@@ -576,6 +595,7 @@ static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * 
     session -> sslCtx = sslCtx;
     session -> ssl = ssl;
     session -> isActive = SESSION_ACTIVE;
+    session -> nonBlocking = basket -> nonBlocking;
     session -> magic = SESSION_MAGIC;
 
     session -> creationTime = time(NULL);
@@ -712,7 +732,7 @@ static void readerDispatch(Session *session, unsigned char *payload, uint32_t le
             // with the request threads via writeMutex.
             static const unsigned char settingsAck[9] = {0, 0, 0, 0x4, 0x1, 0, 0, 0, 0};
             pthread_mutex_lock(&session -> writeMutex);
-            SSL_write(session -> ssl, settingsAck, sizeof(settingsAck));
+            sslWriteAllEx(session -> ssl, session -> nonBlocking, 5000, settingsAck, sizeof(settingsAck));
             pthread_mutex_unlock(&session -> writeMutex);
         } else if (type == 0x6 && (flags & 0x1) == 0 && length == 8) {
             // PING (not an ACK): echo the 8-byte opaque payload back with the
@@ -721,7 +741,7 @@ static void readerDispatch(Session *session, unsigned char *payload, uint32_t le
             unsigned char pingAck[17] = {0, 0, 8, 0x6, 0x1, 0, 0, 0, 0};
             memcpy(pingAck + 9, payload, 8);
             pthread_mutex_lock(&session -> writeMutex);
-            SSL_write(session -> ssl, pingAck, sizeof(pingAck));
+            sslWriteAllEx(session -> ssl, session -> nonBlocking, 5000, pingAck, sizeof(pingAck));
             pthread_mutex_unlock(&session -> writeMutex);
         }
         if (type == 0x7) { // GOAWAY: fail streams that have no response yet
@@ -735,12 +755,13 @@ static void* readerLoop(void *arg) {
     SSL *ssl = session -> ssl;
     int fd = SSL_get_fd(ssl);
 
-    // The socket stays in blocking mode so the request threads' SSL_write path
-    // (which treats a short write as fatal) keeps working. Each blocking SSL_read
-    // is gated behind select() with a short timeout so this loop can observe
-    // readerRunning and exit promptly on shutdown. SSL_pending() is checked first:
-    // one TLS record can hold several frames already decrypted and buffered inside
-    // the SSL object, with nothing left readable at the socket layer.
+    // Each SSL_read is gated behind select() with a short timeout so this loop
+    // can observe readerRunning and exit promptly on shutdown. SSL_pending() is
+    // checked first: one TLS record can hold several frames already decrypted
+    // and buffered inside the SSL object, with nothing left readable at the
+    // socket layer. The socket may be blocking (default) or non-blocking (the
+    // request set "non-blocking": 1); in the latter case SSL_read returns
+    // SSL_ERROR_WANT_READ/WANT_WRITE and we re-select accordingly.
     //
     // Known limitation: this SSL_read runs concurrently with the request threads'
     // SSL_write (serialized among themselves via writeMutex). Under TLS 1.3 a
@@ -749,17 +770,26 @@ static void* readerLoop(void *arg) {
     // It is rare for these short-lived connections and currently left unhandled.
     unsigned char *acc = NULL;
     size_t accSize = 0;
+    // When the socket is in non-blocking mode, an SSL_read may return
+    // SSL_ERROR_WANT_WRITE (e.g. a TLS 1.3 KeyUpdate needs to be emitted). Track
+    // the last WANT_* direction so the next select() waits on the right fd set
+    // instead of spinning on readability.
+    int wantWrite = 0;
 
     while (session -> readerRunning) {
         if (SSL_pending(ssl) == 0) {
-            fd_set rfds;
+            fd_set rfds, wfds;
             FD_ZERO(&rfds);
+            FD_ZERO(&wfds);
             FD_SET(fd, &rfds);
+            if (wantWrite) {
+                FD_SET(fd, &wfds);
+            }
             struct timeval tv;
             tv.tv_sec = 0;
             tv.tv_usec = 100000; // 100ms: bounds shutdown latency, not response latency
 
-            int sr = select(fd + 1, &rfds, NULL, NULL, &tv);
+            int sr = select(fd + 1, &rfds, wantWrite ? &wfds : NULL, NULL, &tv);
             if (sr == 0) {
                 continue; // timeout: re-check readerRunning
             }
@@ -779,6 +809,7 @@ static void* readerLoop(void *arg) {
         int bytesRead = SSL_read(ssl, buffer, sizeof(buffer));
 
         if (bytesRead > 0) {
+            wantWrite = 0;
             unsigned char *newAcc = realloc(acc, accSize + bytesRead);
             if (newAcc == NULL) {
                 LOG("ERROR", "reader: accumulation buffer allocation failed");
@@ -816,8 +847,13 @@ static void* readerLoop(void *arg) {
             }
         } else {
             int err = SSL_get_error(ssl, bytesRead);
-            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+            if (err == SSL_ERROR_WANT_READ) {
+                wantWrite = 0;
                 continue; // not enough for a full record yet; re-select
+            }
+            if (err == SSL_ERROR_WANT_WRITE) {
+                wantWrite = 1;
+                continue; // SSL wants to flush a pending record; wait for writability
             }
             // bytesRead == 0 (peer closed) or a fatal error: end all streams.
             LOG("DEBUG", "reader: connection closed/error (ret=%d, err=%d)", bytesRead, err);

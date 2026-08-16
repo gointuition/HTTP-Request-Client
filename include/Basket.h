@@ -130,6 +130,7 @@ typedef struct {
     char                clientHelloId[64];
     int                 sockfd;
     int                 isActive;
+    int                 nonBlocking;    // 1 = socket runs in non-blocking I/O mode
     int                 expirationInMilliseconds;
     uint32_t            magic;
     atomic_uint         streamId; // stream id to be used
@@ -159,6 +160,7 @@ typedef struct {
     const char  *method;
     // const char  *sessionId;
     int         decompress;
+    int         nonBlocking;    // 1 = use non-blocking socket I/O for this request
     int         connectTimeoutInMilliseconds;
     int         responseReadingTimeoutInMilliseconds;
     int         sessionExpirationInMilliseconds;

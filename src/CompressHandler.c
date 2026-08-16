@@ -406,36 +406,68 @@ DecompressedObj* decompress_Brotli(unsigned char *payload, size_t payloadSize) {
         LOG("ERROR", "(Brotli) Failed to allocate decompression object\n");
         return NULL;
     }
+    decompressedObj -> error = ERR_NONE;
+    decompressedObj -> decompressedPayload = NULL;
+    decompressedObj -> decompressedPayloadSize = 0;
+
+    BrotliDecoderState *state = BrotliDecoderCreateInstance(NULL, NULL, NULL);
+    if (!state) {
+        LOG("ERROR", "(Brotli) Failed to create decoder instance\n");
+        decompressedObj -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+        return decompressedObj;
+    }
 
     size_t decompressedSize = payloadSize * 8;
     if (decompressedSize < 4096) decompressedSize = 4096;
     unsigned char *decompressed = malloc(decompressedSize);
     if (!decompressed) {
         LOG("ERROR", "(Brotli) Failed to allocate decompression buffer\n");
-        decompressedObj -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+        decompressedObj->error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+        BrotliDecoderDestroyInstance(state);
         return decompressedObj;
     }
-    const size_t availableIn = payloadSize;
-    const uint8_t *nextIn = payload;
-    size_t availableOut = decompressedSize;
-    uint8_t *nextOut = decompressed;
 
-    const BrotliDecoderResult result = BrotliDecoderDecompress(availableIn, nextIn, &availableOut, nextOut);
+    const uint8_t *nextIn = payload;
+    size_t availableIn = payloadSize;
+    size_t totalOut = 0;
+
+    BrotliDecoderResult result = BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT;
+    while (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT) {
+        size_t availableOut = decompressedSize - totalOut;
+        uint8_t *nextOut = decompressed + totalOut;
+
+        result = BrotliDecoderDecompressStream(
+            state, &availableIn, &nextIn, &availableOut, &nextOut, NULL);
+
+        totalOut = decompressedSize - availableOut;
+
+        if (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT) {
+            size_t newSize = decompressedSize * 2;
+            unsigned char *newBuf = realloc(decompressed, newSize);
+            if (!newBuf) {
+                LOG("ERROR", "(Brotli) Failed to reallocate decompression buffer\n");
+                decompressedObj->error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+                free(decompressed);
+                BrotliDecoderDestroyInstance(state);
+                return decompressedObj;
+            }
+            decompressed = newBuf;
+            decompressedSize = newSize;
+        }
+    }
+
+    BrotliDecoderDestroyInstance(state);
+
     if (result != BROTLI_DECODER_RESULT_SUCCESS) {
-        free(decompressed);
         LOG("ERROR", "(Brotli) Inflate failed: %d\n", result);
-        decompressedObj -> error = ERR_RESPONSE_BROTLI_INFLATE_FAILED;
+        decompressedObj->error = ERR_RESPONSE_BROTLI_INFLATE_FAILED;
+        free(decompressed);
         return decompressedObj;
     }
-//    LOG("ERROR", "(Brotli) Decompressed content (%zu bytes):\n", availableOut);
-//    LOG("ERROR", "%.*s\n", (int) availableOut, decompressed);
-    decompressed[availableOut] = '\0';
-    decompressedObj -> decompressedPayload = decompressed;
-    decompressedObj -> decompressedPayloadSize = availableOut;
-    // free(decompressed);
-    // if (combinedPayload != NULL) {
-    //     free(combinedPayload);
-    // }
+
+    decompressed[totalOut] = '\0';
+    decompressedObj->decompressedPayload = decompressed;
+    decompressedObj->decompressedPayloadSize = totalOut;
     return decompressedObj;
 }
 

@@ -5,6 +5,8 @@ export interface HttpRequestConfig {
     connectTimeoutInMilliseconds?: number;
     responseReadingTimeoutInMilliseconds?: number;
     decompress?: number;
+    /** 0 = blocking (default), 1 = non-blocking socket I/O */
+    'non-blocking'?: number;
     headers?: Record<string, string>;
     session?: {
         expirationInMilliseconds?: number;
@@ -60,6 +62,7 @@ export class HttpClient {
     init(): this;
     request(config: HttpRequestConfig | string): HttpResult;
     requestAsync(config: HttpRequestConfig | string): Promise<string>;
+    requestNonBlocking(config: HttpRequestConfig | string, pollIntervalMs?: number): Promise<string>;
     cleanup(): void;
 }
 

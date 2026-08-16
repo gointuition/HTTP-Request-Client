@@ -174,17 +174,57 @@ void getBasketContent(char *basketStr, char *dest);
 
 // 3. Cleanup (call once at shutdown)
 void cleanupEnv(void);
+
+// ─── Non-blocking / async request API ───
+// Start a request (the request config should carry "non-blocking": 1) WITHOUT
+// waiting for the response. Returns a positive request id, or 0 on failure.
+// The calling thread returns immediately — the response is collected in the
+// background reader thread.
+long handleRequestAsync(const char *requestJSONString);
+
+// Poll an async request. Sets *outStatus to 0 (still in flight), 1 (completed)
+// or -1 (failed/timed out), and *outLen to the response JSON length. Returns a
+// malloc'd response JSON string only on completion (caller frees it); otherwise
+// returns NULL. On completion the request id is reclaimed.
+char* pollRequest(long requestId, int *outStatus, int *outLen);
+
+// Reap all in-flight async requests (called automatically by cleanupEnv).
+void cleanupAsyncRequests(void);
 ```
 
-> **Blocking by design.** `handleRequest` is synchronous — the calling thread
-> blocks until the response is fully read, the timeout fires, or an error is
-> returned. There is no async/callback variant in the C core. To issue requests
-> concurrently, call `handleRequest` from multiple threads (it is thread-safe);
-> same-host requests are then multiplexed over a single shared HTTP/2 connection.
-> The language bindings build their concurrency on top of this: e.g. the Node.js
-> binding runs each blocking call on a libuv worker thread (raise
-> `UV_THREADPOOL_SIZE` for high concurrency — see [nodejs/README.MD](nodejs/README.MD)),
-> and Python/Java use their own thread pools.
+> **Two concurrency models.** The core offers both a blocking and a non-blocking
+> surface:
+>
+> * **`handleRequest` (blocking)** — synchronous: the calling thread blocks until
+>   the response is fully read, the timeout fires, or an error is returned.
+>   Concurrency is achieved by calling it from multiple threads (thread-safe);
+>   same-host requests are multiplexed over one shared HTTP/2 connection.
+>
+> * **`handleRequestAsync` + `pollRequest` (non-blocking)** — the request is sent
+>   and the call returns immediately with an id; the caller polls later (e.g. on
+>   an event loop timer) and reaps the finished result. This path does not occupy
+>   a thread while waiting, so it scales independently of any thread-pool size.
+>   The request config must set `"non-blocking": 1` so the underlying socket runs
+>   in `O_NONBLOCK` mode as well.
+>
+> The language bindings build on both surfaces:
+>
+> * **Node.js** — `requestAsync` runs the blocking `handleRequest` on a libuv
+>   worker (raise `UV_THREADPOOL_SIZE` for high concurrency — see
+>   [nodejs/README.MD](nodejs/README.MD)); `requestNonBlocking` uses the async
+>   surface and never blocks the event loop.
+> * **Python** — `request` (blocking, call from threads / a `ThreadPoolExecutor`;
+>   cffi releases the GIL so these run in parallel); `start_request` +
+>   `poll_request` (or the `request_non_blocking` convenience) for the async
+>   surface.
+> * **Java** — `request` (blocking, call from threads / an `ExecutorService`);
+>   `startRequest` + `pollRequest` (or the `requestNonBlocking` convenience) for
+>   the async surface.
+>
+> The async surface matters when a thread pool is bounded (e.g. fewer worker
+> threads than in-flight requests): a single thread can drive arbitrarily many
+> in-flight requests by firing them all and polling, instead of holding one
+> thread per blocking call.
 
 ### Example
 
@@ -251,6 +291,7 @@ int main() {
 | `connectTimeoutInMilliseconds` | `number` | TCP + TLS connect timeout |
 | `responseReadingTimeoutInMilliseconds` | `number` | Response reading timeout |
 | `decompress` | `number` | Decompression flags: 0 (none), 1 (gzip), 2 (deflate), 4 (br), 8 (zstd), or combinations (e.g. 15 = all) |
+| `non-blocking` | `number` | Socket I/O mode for the HTTP/2 transfer phase: 0 (blocking, default) or 1 (non-blocking `O_NONBLOCK` + `select`/`SSL_ERROR_WANT_*` retry) |
 | `log` | `number` | Enable logging: 0 (off), 1 (on) |
 | `proxy` | `object` | Proxy: `{ scheme, host, port, authorization? }` |
 | `session` | `object` | Session: `{ expirationInMilliseconds, clientHelloId? }` |

@@ -11,6 +11,8 @@ extern "C" {
     void cleanupEnv(void);
     char* handleRequest(const char *requestJSONString, int *outLen);
     void getBasketContent(char *basketStr, char *dest);
+    long handleRequestAsync(const char *requestJSONString);
+    char* pollRequest(long requestId, int *outStatus, int *outLen);
 }
 
 // Global initialization flag
@@ -262,6 +264,116 @@ napi_value HandleRequestAsync(napi_env env, napi_callback_info info) {
     return promise;
 }
 
+// ─── Non-blocking request (fire-and-forget start + poll) ───
+//
+// Unlike requestAsync (which runs the fully-blocking handleRequest on a libuv
+// worker), this path uses the C core's non-blocking surface: startRequest
+// sends HEADERS/DATA and returns immediately with a request id, and pollRequest
+// checks/collects the result later. Both are fast, non-blocking calls that run
+// on the JS thread, so the event loop never stalls and UV_THREADPOOL_SIZE is
+// irrelevant. The JS layer drives the poll loop with a timer.
+
+// Start a non-blocking request; returns { id } (id === 0 means start failed).
+napi_value HandleRequestNonBlocking(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+
+    napi_status status = napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (status != napi_ok || argc < 1) {
+        napi_throw_error(env, "ERR_INVALID_ARGS", "Expected 1 argument");
+        return nullptr;
+    }
+
+    napi_valuetype valueType;
+    napi_typeof(env, args[0], &valueType);
+    if (valueType != napi_string) {
+        napi_throw_type_error(env, "ERR_INVALID_TYPE", "Argument must be a string");
+        return nullptr;
+    }
+
+    size_t jsonLength;
+    status = napi_get_value_string_utf8(env, args[0], nullptr, 0, &jsonLength);
+    if (status != napi_ok) {
+        napi_throw_error(env, "ERR_STRING_LENGTH", "Failed to get string length");
+        return nullptr;
+    }
+
+    char *jsonStr = (char *)malloc(jsonLength + 1);
+    if (!jsonStr) {
+        napi_throw_error(env, "ERR_NO_MEMORY", "Memory allocation failed");
+        return nullptr;
+    }
+    size_t copied;
+    status = napi_get_value_string_utf8(env, args[0], jsonStr, jsonLength + 1, &copied);
+    if (status != napi_ok) {
+        free(jsonStr);
+        napi_throw_error(env, "ERR_STRING_COPY", "Failed to copy string");
+        return nullptr;
+    }
+    jsonStr[jsonLength] = '\0';
+
+    if (!envInitialized) {
+        initialiseEnv();
+        envInitialized = 1;
+    }
+
+    long id = handleRequestAsync(jsonStr);
+    free(jsonStr);
+
+    napi_value resultObj;
+    napi_create_object(env, &resultObj);
+    napi_value idValue;
+    napi_create_int64(env, (int64_t)id, &idValue);
+    napi_set_named_property(env, resultObj, "id", idValue);
+    return resultObj;
+}
+
+// Poll a non-blocking request. Args: requestId (number).
+// Returns { status: 0|1|-1, data?: string }.
+napi_value PollRequest(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+
+    napi_status status = napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (status != napi_ok || argc < 1) {
+        napi_throw_error(env, "ERR_INVALID_ARGS", "Expected 1 argument");
+        return nullptr;
+    }
+
+    int64_t id = 0;
+    status = napi_get_value_int64(env, args[0], &id);
+    if (status != napi_ok) {
+        napi_throw_type_error(env, "ERR_INVALID_TYPE", "Argument must be a number");
+        return nullptr;
+    }
+
+    int pollStatus = 0;
+    int outLen = 0;
+    char *result = pollRequest((long)id, &pollStatus, &outLen);
+
+    napi_value resultObj;
+    napi_create_object(env, &resultObj);
+    napi_value statusValue;
+    napi_create_int32(env, pollStatus, &statusValue);
+    napi_set_named_property(env, resultObj, "status", statusValue);
+
+    if (result != nullptr && outLen > 0) {
+        char *resultBuffer = (char *)malloc(outLen + 1);
+        if (resultBuffer) {
+            getBasketContent(result, resultBuffer); // frees result
+            resultBuffer[outLen] = '\0';
+            napi_value dataValue;
+            napi_create_string_utf8(env, resultBuffer, (size_t)outLen, &dataValue);
+            napi_set_named_property(env, resultObj, "data", dataValue);
+            free(resultBuffer);
+        } else if (result) {
+            free(result);
+        }
+    }
+
+    return resultObj;
+}
+
 /**
  * Module initialization - DO NOT call initialiseEnv here
  */
@@ -270,10 +382,12 @@ napi_value Init(napi_env env, napi_value exports) {
             {"initEnv", nullptr, InitEnv, nullptr, nullptr, nullptr, napi_default, nullptr},
             {"cleanupEnv", nullptr, CleanupEnv, nullptr, nullptr, nullptr, napi_default, nullptr},
             {"handleRequest", nullptr, HandleRequest, nullptr, nullptr, nullptr, napi_default, nullptr},
-            {"requestAsync", nullptr, HandleRequestAsync, nullptr, nullptr, nullptr, napi_default, nullptr}
+            {"requestAsync", nullptr, HandleRequestAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+            {"startRequest", nullptr, HandleRequestNonBlocking, nullptr, nullptr, nullptr, napi_default, nullptr},
+            {"pollRequest", nullptr, PollRequest, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
 
-    napi_define_properties(env, exports, 4, desc);
+    napi_define_properties(env, exports, 6, desc);
     return exports;
 }
 

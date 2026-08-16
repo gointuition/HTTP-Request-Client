@@ -27,6 +27,7 @@
 #include "Error.h"
 #include "CompressHandler.h"
 #include "Session.h"
+#include "AsyncRequest.h"
 // #include "FrameHandler.h"
 #include "RequestHandler.h"
 #include "ResponseHandler.h"
@@ -70,6 +71,9 @@ void initialiseEnv(void) {
 }
 
 void cleanupEnv(void) {
+    // Reap any in-flight async requests before tearing down sessions so their
+    // streams are unregistered/freed while the sessions are still alive.
+    cleanupAsyncRequests();
     cleanupSessions(1);
     cleanupTLSSessionCache();
 
@@ -103,38 +107,55 @@ void cleanupEnv(void) {
 //    return 1;
 //}
 
+// Prepare + send a request: build the basket, obtain/reuse a session, register
+// a multiplexed stream, and send HEADERS(+DATA). On success, *outStream is set
+// to the registered stream and 0 is returned; the caller owns both the basket
+// and the stream. On failure, returns -1 and basket->error is set (the basket is
+// NOT freed here so the caller can serialize the error).
+int http2StartRequest(Basket *basket, Stream **outStream) {
+    *outStream = NULL;
+
+    // 1. obtain a session (reuse or create; a new connection starts its own
+    //    reader thread that demultiplexes frames by stream id)
+    handleSession(basket);
+    if (basket -> session == NULL) {
+        LOG("ERROR", "session creation failed");
+        return -1;
+    }
+    if (basket -> error.code != NULL) {
+        return -1; // session creation reported an error
+    }
+
+    // 2. register a multiplexed stream on this connection
+    Stream *stream = registerStream(basket);
+    if (stream == NULL) {
+        return -1;
+    }
+
+    // 3. send HEADERS(+DATA), serialized with other streams' writes
+    sendRequest(basket);
+    if (basket -> error.code != NULL) {
+        unregisterStream(basket, stream);
+        return -1;
+    }
+
+    *outStream = stream;
+    return 0;
+}
+
 char* handleRequest(const char *requestJSONString, int *outLen) {
     // 1. prepare request
     Basket *basket = buildBasket(requestJSONString);
     if (basket != NULL && basket -> error.code == NULL) {
         for (int attempt = 0; attempt < 2; ++attempt) {
-            // 2. obtain a session (reuse or create; a new connection starts its
-            //    own reader thread that demultiplexes frames by stream id)
-            handleSession(basket);
-            if (basket -> session == NULL) {
-                LOG("ERROR", "session creation failed");
-                break;
-            }
-            if (basket -> error.code != NULL) {
-                break; // session creation reported an error
-            }
-
-            // 3. register a multiplexed stream on this connection
-            Stream *stream = registerStream(basket);
-            if (stream == NULL) {
-                break;
-            }
-
-            // 4. send HEADERS(+DATA), serialized with other streams' writes
-            sendRequest(basket);
-
-            // 5. wait for the reader thread to finish this stream, then move the
-            //    collected headers/payload into the basket (and decompress)
-            if (basket -> error.code == NULL) {
+            Stream *stream = NULL;
+            if (http2StartRequest(basket, &stream) == 0) {
+                // 2. wait for the reader thread to finish this stream, then move
+                //    the collected headers/payload into the basket (and decompress)
                 awaitStream(basket, stream);
-            }
-            if (basket -> error.code == NULL) {
-                finalizeStreamIntoBasket(basket, stream);
+                if (basket -> error.code == NULL) {
+                    finalizeStreamIntoBasket(basket, stream);
+                }
             }
 
             // a connection-level GOAWAY / SETTINGS_TIMEOUT is retryable once.
@@ -154,7 +175,9 @@ char* handleRequest(const char *requestJSONString, int *outLen) {
                     || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_UNKNOWN_ERROR.code) == 0
                     || strcmp(basket -> error.code, ERR_PROXY_SOCKET_CONNECTING_REFUSED.code) == 0);
 
-            unregisterStream(basket, stream);
+            if (stream != NULL) {
+                unregisterStream(basket, stream);
+            }
 
             if (retryable && attempt == 0) {
                 // Mark the connection unusable so no new request reuses it; the

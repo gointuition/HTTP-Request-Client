@@ -46,6 +46,25 @@ public class Http2Client {
      */
     private static native void nativeCleanup();
 
+    /**
+     * Start a non-blocking request (send HEADERS/DATA, return immediately).
+     * Corresponds to C: handleRequestAsync(const char*)
+     *
+     * @param requestJson JSON string describing the request config.
+     * @return Positive request id to poll, or 0 on failure.
+     */
+    private static native long nativeStartRequest(String requestJson);
+
+    /**
+     * Poll a non-blocking request started with nativeStartRequest.
+     * Corresponds to C: pollRequest(long, int*, int*)
+     *
+     * @param requestId The id returned by nativeStartRequest.
+     * @return Object[]{ Integer status (0 in-flight / 1 done / -1 failed),
+     *                    String data (response JSON when done) }.
+     */
+    private static native Object[] nativePollRequest(long requestId);
+
     // ── Library loading ──────────────────────────────────────────────────
 
     static {
@@ -216,6 +235,92 @@ public class Http2Client {
             throw new RuntimeException("handleRequest failed (native returned null)");
         }
         return result;
+    }
+
+    /**
+     * Poll result for a non-blocking request.
+     */
+    public static final class PollResult {
+        /** 0 = in flight, 1 = completed, -1 = failed/timed out. */
+        public final int status;
+        /** Response JSON string when completed; otherwise null. */
+        public final String data;
+
+        public PollResult(int status, String data) {
+            this.status = status;
+            this.data = data;
+        }
+
+        public boolean isDone() {
+            return status != 0;
+        }
+    }
+
+    /**
+     * Start a non-blocking request. Sends HEADERS/DATA and returns immediately
+     * without waiting for the response. The calling thread is not blocked while
+     * the response is in flight, so the number of concurrent requests is not
+     * bounded by any thread-pool size — poll the returned id from one thread to
+     * reap results as they complete.
+     *
+     * @param requestJson JSON string describing the request config (should set
+     *                    "non-blocking": 1 so the socket runs in O_NONBLOCK mode).
+     * @return Positive request id, or 0 on failure.
+     */
+    public static long startRequest(String requestJson) {
+        if (!initialized) {
+            init();
+        }
+        return nativeStartRequest(requestJson);
+    }
+
+    /**
+     * Poll a non-blocking request started with startRequest.
+     *
+     * @param requestId The id returned by startRequest.
+     * @return PollResult carrying the status and (on completion) the response JSON.
+     * @throws IllegalStateException if the id is unknown (already reaped).
+     */
+    public static PollResult pollRequest(long requestId) {
+        if (!initialized) {
+            init();
+        }
+        Object[] arr = nativePollRequest(requestId);
+        if (arr == null || arr.length < 1 || arr[0] == null) {
+            throw new IllegalStateException("pollRequest returned no result");
+        }
+        int status = ((Integer) arr[0]).intValue();
+        String data = arr.length >= 2 ? (String) arr[1] : null;
+        return new PollResult(status, data);
+    }
+
+    /**
+     * Convenience: start a non-blocking request and wait (poll) until it
+     * completes. Equivalent to startRequest() + a poll loop. Returns the response
+     * JSON string.
+     *
+     * @param requestJson JSON string describing the request config.
+     * @param pollIntervalMs Poll interval in milliseconds.
+     * @return Response JSON string.
+     * @throws RuntimeException if the request fails to start or times out.
+     */
+    public static String requestNonBlocking(String requestJson, long pollIntervalMs) {
+        long id = startRequest(requestJson);
+        if (id == 0) {
+            throw new RuntimeException("failed to start non-blocking request");
+        }
+        while (true) {
+            PollResult r = pollRequest(id);
+            if (r.isDone()) {
+                return r.data != null ? r.data : "";
+            }
+            try {
+                Thread.sleep(pollIntervalMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("interrupted while polling non-blocking request", e);
+            }
+        }
     }
 
     /**

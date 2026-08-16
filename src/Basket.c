@@ -234,6 +234,10 @@ static void parseOptions(Basket *basket, const json_t *jsonRequest) {
     if (decompress != NULL) {
         basket -> decompress = json_integer_value(decompress);
     }
+    json_t *nonBlocking = json_object_get(jsonRequest, "non-blocking");
+    if (nonBlocking != NULL) {
+        basket -> nonBlocking = json_integer_value(nonBlocking) != 0 ? 1 : 0;
+    }
 }
 
 static void parseProxy(Basket *basket, const json_t *jsonRequest) {
@@ -289,6 +293,7 @@ void initBasket(Basket * basket) {
     basket -> responseReadingTimeoutInMilliseconds = 20000;
 
     basket -> decompress = 1;
+    basket -> nonBlocking = 0;
 }
 
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
@@ -691,6 +696,7 @@ char* basketToString(Basket *basket, int *outLen) {
     json_object_set_new(root, "connectTimeoutInMilliseconds", json_integer(basket -> connectTimeoutInMilliseconds));
     json_object_set_new(root, "responseReadingTimeoutInMilliseconds", json_integer(basket -> responseReadingTimeoutInMilliseconds));
     json_object_set_new(root, "decompress", json_integer(basket -> decompress));
+    json_object_set_new(root, "non-blocking", json_integer(basket -> nonBlocking));
 
     // session
     json_t *session = json_object();

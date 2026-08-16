@@ -7,6 +7,10 @@
 #include <string.h>
 #include <zlib.h>
 
+#ifndef _WIN32
+#include <sys/select.h>
+#endif
+
 #include "Compat.h"
 
 #include "SSLHandler.h"
@@ -17,6 +21,55 @@
 
 // HTTP/2 connection preface
 static const char HTTP2_PREFACE[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
+// Write len bytes to ssl, driving the socket with select() and retrying on
+// SSL_ERROR_WANT_READ / SSL_ERROR_WANT_WRITE when the session runs in
+// non-blocking mode. On a blocking socket this degenerates to a single
+// SSL_write. Returns 1 on success (all bytes written), -1 on failure (basket
+// error is set by the caller). `timeoutInMillis` bounds the total time spent
+// waiting for writability (connect timeout is reused for the transfer phase).
+int sslWriteAllEx(SSL *ssl, int nonBlocking, int timeoutInMillis, const unsigned char *buf, size_t len) {
+    size_t written = 0;
+    while (written < len) {
+        const int rc = SSL_write(ssl, buf + written, (int) (len - written));
+        if (rc > 0) {
+            written += (size_t) rc;
+            continue;
+        }
+
+        const int err = SSL_get_error(ssl, rc);
+        if (!nonBlocking || (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE)) {
+            return -1; // blocking path error, or a real (non-WANT) error
+        }
+
+        // Non-blocking: wait for readability (WANT_READ) or writability
+        // (WANT_WRITE) before retrying.
+        const int fd = SSL_get_fd(ssl);
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(fd, &fds);
+        struct timeval tv;
+        const int ms = timeoutInMillis;
+        tv.tv_sec = ms / 1000;
+        tv.tv_usec = (ms % 1000) * 1000;
+
+        int sr;
+        if (err == SSL_ERROR_WANT_READ) {
+            sr = select(fd + 1, &fds, NULL, NULL, &tv);
+        } else {
+            sr = select(fd + 1, NULL, &fds, NULL, &tv);
+        }
+        if (sr <= 0) {
+            return -1; // timeout or select() error
+        }
+    }
+    return 1;
+}
+
+// Basket-aware convenience wrapper for the request send path.
+static int sslWriteAll(Basket *basket, SSL *ssl, const unsigned char *buf, size_t len) {
+    return sslWriteAllEx(ssl, basket -> nonBlocking, basket -> connectTimeoutInMilliseconds, buf, len);
+}
 
 typedef struct {
     const char *name;
@@ -87,7 +140,7 @@ static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t 
 
 int establishTransport(Basket *basket, SSL *ssl) {
     // send HTTP/2 Preface frame
-    if (SSL_write(ssl, HTTP2_PREFACE, strlen(HTTP2_PREFACE)) <= 0) {
+    if (sslWriteAll(basket, ssl, (const unsigned char *) HTTP2_PREFACE, strlen(HTTP2_PREFACE)) != 1) {
         LOG("ERROR", "send HTTP/2 Preface frame fa");
         basket -> error = ERR_REQUEST_SENDING_HTTP2_PREFACE_FRAME_FAILED;
         return -1;
@@ -102,14 +155,14 @@ int establishTransport(Basket *basket, SSL *ssl) {
     }
 
     // send HTTP/2 Settings frame
-    if (SSL_write(ssl, fp -> settingsFrame, fp -> settingsFrameLen) <= 0) {
+    if (sslWriteAll(basket, ssl, fp -> settingsFrame, fp -> settingsFrameLen) != 1) {
         LOG("ERROR", "send HTTP/2 settings frame fa");
         basket -> error = ERR_REQUEST_SENDING_HTTP2_SETTINGS_FRAME_FAILED;
         return -1;
     }
 
     // send HTTP/2 Window Update frame
-    if (SSL_write(ssl, fp -> windowUpdateFrame, fp -> windowUpdateFrameLen) <= 0) {
+    if (sslWriteAll(basket, ssl, fp -> windowUpdateFrame, fp -> windowUpdateFrameLen) != 1) {
         LOG("ERROR", "send HTTP/2 window update frame");
         basket -> error = ERR_REQUEST_SENDING_HTTP2_WINDOW_UPDATE_FRAME_FAILED;
         return -1;
@@ -127,7 +180,7 @@ void sendHeadersFrame(Basket *basket) {
     }
 
     // logHex("Sending HEADERS frame:", headersFrame, headersFrameLen);
-    if (SSL_write(basket -> session -> ssl, headersFrame, headersFrameLen) <= 0) {
+    if (sslWriteAll(basket, basket -> session -> ssl, headersFrame, headersFrameLen) != 1) {
         LOG("ERROR", "SSL_write http headers frame failed");
         basket -> error = ERR_REQUEST_SENDING_HTTP2_HEADERS_FRAME_FAILED;
         return;
@@ -161,7 +214,7 @@ void sendDataFrame(Basket *basket) {
 
         memcpy(dataFrameBuffer + 9, basket -> request.payload, payloadLen);
 
-        if (SSL_write(basket -> session -> ssl, dataFrameBuffer, dataFrameLen) <= 0) {
+        if (sslWriteAll(basket, basket -> session -> ssl, dataFrameBuffer, dataFrameLen) != 1) {
             free(dataFrameBuffer);
             LOG("ERROR", "SSL_write http data frame failed");
             basket -> error = ERR_REQUEST_SENDING_HTTP2_DATA_FRAME_FAILED;

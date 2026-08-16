@@ -22,6 +22,8 @@ ffi.cdef("""
     void cleanupEnv(void);
     char* handleRequest(const char *requestJSONString, int *outLen);
     void getBasketContent(char *basketStr, char *dest);
+    long handleRequestAsync(const char *requestJSONString);
+    char* pollRequest(long requestId, int *outStatus, int *outLen);
 """)
 
 
@@ -122,16 +124,8 @@ class HttpClient:
         if not self._initialized:
             self.init()
 
-        # Convert dict to JSON string if needed
-        if isinstance(config, dict):
-            json_str = json.dumps(config)
-        elif isinstance(config, str):
-            json_str = config
-        else:
-            raise TypeError("config must be a dict or JSON string")
-
         # Encode to bytes for cffi
-        request_bytes = json_str.encode("utf-8")
+        request_bytes = self._config_to_bytes(config)
 
         # Step 1: call handleRequest to get the result pointer and length
         out_len = ffi.new("int *")
@@ -147,6 +141,83 @@ class HttpClient:
             return result_bytes.decode("utf-8")
         else:
             raise RuntimeError(f"handleRequest failed")
+
+    def _config_to_bytes(self, config):
+        """Convert a request config (dict or JSON string) to encoded bytes."""
+        if isinstance(config, dict):
+            json_str = json.dumps(config)
+        elif isinstance(config, str):
+            json_str = config
+        else:
+            raise TypeError("config must be a dict or JSON string")
+        return json_str.encode("utf-8")
+
+    def start_request(self, config):
+        """
+        Start a non-blocking request. Sends HEADERS/DATA and returns immediately
+        with a request id, without waiting for the response. The calling thread
+        is not blocked while the response is in flight, so the number of
+        concurrent requests is not bounded by any thread-pool size — poll the id
+        from one thread to reap results as they complete.
+
+        :param config: Request configuration dict or JSON string (should set
+                       "non-blocking": 1 so the socket runs in O_NONBLOCK mode).
+        :return: Positive request id, or 0 on failure.
+        """
+        if not self._initialized:
+            self.init()
+
+        request_bytes = self._config_to_bytes(config)
+        return self._lib.handleRequestAsync(request_bytes)
+
+    def poll_request(self, request_id):
+        """
+        Poll a non-blocking request started with start_request.
+
+        :param request_id: The id returned by start_request.
+        :return: (status, data) tuple. status is 0 (in flight), 1 (completed) or
+                 -1 (failed/timed out); data is the response JSON string when
+                 completed, otherwise None.
+        :raises RuntimeError: If the id is unknown (already reaped).
+        """
+        if not self._initialized:
+            self.init()
+
+        out_status = ffi.new("int *")
+        out_len = ffi.new("int *")
+        result = self._lib.pollRequest(request_id, out_status, out_len)
+        status = out_status[0]
+        actual_len = out_len[0]
+
+        data = None
+        if result != ffi.NULL and actual_len > 0:
+            buffer = ffi.new("char[]", actual_len + 1)
+            self._lib.getBasketContent(result, buffer)
+            data = ffi.buffer(buffer, actual_len)[:].decode("utf-8")
+
+        return status, data
+
+    def request_non_blocking(self, config, poll_interval_ms=5):
+        """
+        Convenience: start a non-blocking request and wait (poll) until it
+        completes. Equivalent to start_request() + a poll loop.
+
+        :param config: Request configuration dict or JSON string.
+        :param poll_interval_ms: Poll interval in milliseconds.
+        :return: Response JSON string.
+        :raises RuntimeError: If the request fails to start or times out.
+        """
+        import time as _time
+
+        request_id = self.start_request(config)
+        if not request_id:
+            raise RuntimeError("failed to start non-blocking request")
+
+        while True:
+            status, data = self.poll_request(request_id)
+            if status != 0:
+                return data if data is not None else ""
+            _time.sleep(poll_interval_ms / 1000.0)
 
     def cleanup(self):
         """Cleanup resources."""
