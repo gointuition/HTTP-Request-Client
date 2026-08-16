@@ -704,11 +704,13 @@ jobs:
           Set-Location "${{ github.workspace }}\java"
           # Build via the Windows-native Maven wrapper. mvnw.cmd downloads a
           # pinned Maven from Maven Central and invokes mvn.cmd (Windows paths),
-          # avoiding the MSYS2 bin/mvn classpath bug. The JNI bridge is compiled
-          # with gcc because java/pom.xml hardcodes jni.compiler=gcc in the
-          # antrun step (no -D flag needed, which also avoids MSYS2/PowerShell
-          # mangling of -D arguments).
-          .\mvnw.cmd -f "${{ github.workspace }}\java\pom.xml" clean package 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\java_test.log"
+          # avoiding the MSYS2 bin/mvn classpath bug. The Windows Maven profile
+          # defaults jni.compiler=msvc; we must pass -Djni.compiler=gcc so the
+          # JNI bridge compiles with gcc (MinGW) against the MinGW-built
+          # libhttp2client.dll — the MSVC path would need a http2client.lib
+          # import library that does not exist. The quoted -D arg is passed
+          # through unchanged by PowerShell 7 to the batch file.
+          .\mvnw.cmd -f "${{ github.workspace }}\java\pom.xml" clean package "-Djni.compiler=gcc" 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\java_test.log"
           if ($LASTEXITCODE -ne 0) { Write-Error "maven build failed"; exit 1 }
           # Run the test from the fat JAR (JDK 21 accepts --enable-native-access).
           java --enable-native-access=ALL-UNNAMED -cp "build\http2-client-1.0.0.jar" Test 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\java_test.log" -Append
