@@ -678,11 +678,14 @@ jobs:
           path: python_test.log
           if-no-files-found: ignore
 
-      # Java: build.sh already handles MSYS2 (resolves JAVA_HOME, requires
-      # gcc).  setup-java provides a JDK.  Maven is downloaded inside the
-      # MSYS2 step (its GITHUB_PATH entry isn't inherited by MSYS2 shell).
-      # The JNI bridge is compiled with gcc (-Djni.compiler=gcc) to match
-      # the MinGW-built libhttp2client.dll.
+      # Java: the Windows Java binding is built from PowerShell (not MSYS2 bash).
+      # Maven's bash launcher `bin/mvn` has a bug under MSYS2/MINGW64: its
+      # MinGW branch leaves CLASSWORLDS_JAR as a POSIX path, so the Windows
+      # java.exe dies with "Could not find or load main class
+      # org.codehaus.plexus.classworlds.launcher.Launcher". Running the build
+      # through the Windows-native `mvnw.cmd` (which shells out to `mvn.cmd`)
+      # avoids that entirely. gcc (for the JNI bridge) comes from MSYS2's
+      # mingw64\bin, prepended to PATH like the Node.js step does.
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -691,30 +694,32 @@ jobs:
 
       - name: Java — build and run Test.java (Windows)
         id: java_test_win
-        shell: msys2 {0}
+        shell: pwsh
         run: |
-          set -o pipefail
-          # setup-java sets JAVA_HOME as a Windows path; convert to Unix
-          # form so it works inside MSYS2 regardless of path-conversion
-          # settings.
-          if [ -n "$JAVA_HOME" ]; then
-            export JAVA_HOME="$(cygpath -u "$JAVA_HOME")"
-            export PATH="$JAVA_HOME/bin:$PATH"
-          fi
+          $ErrorActionPreference = 'Stop'
+          # setup-java sets JAVA_HOME; the JNI bridge needs gcc from MSYS2.
+          $env:PATH = "${{ steps.msys2_setup.outputs.msys2-location }}\mingw64\bin;" + $env:PATH
+          where.exe gcc
           java -version
-          # Maven: the Java binding ships a Maven Wrapper (./mvnw), so build.sh
-          # downloads a pinned Maven from Maven Central (repo.maven.apache.org)
-          # — stable and immune to the intermittent rate-limiting /
-          # truncated-download failures that apache.org's dlcdn / archive hosts
-          # hit on CI runners (which surface as "Could not find or load main
-          # class org.codehaus.plexus.classworlds.launcher.Launcher"). No manual
-          # Maven download is needed here.
-          cd "${{ github.workspace }}/java"
-          bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
-          echo "---"
-          if grep -q "All tests passed" "${{ github.workspace }}/java_test.log"; then
-            echo "::notice:: Java test PASSED"
-          fi
+          Set-Location "${{ github.workspace }}\java"
+          # Build via the Windows-native Maven wrapper. mvnw.cmd downloads a
+          # pinned Maven from Maven Central and invokes mvn.cmd (Windows paths),
+          # avoiding the MSYS2 bin/mvn classpath bug. The JNI bridge is compiled
+          # with gcc because java/pom.xml hardcodes jni.compiler=gcc in the
+          # antrun step (no -D flag needed, which also avoids MSYS2/PowerShell
+          # mangling of -D arguments).
+          .\mvnw.cmd -f "${{ github.workspace }}\java\pom.xml" clean package 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\java_test.log"
+          if ($LASTEXITCODE -ne 0) { Write-Error "maven build failed"; exit 1 }
+          # Run the test from the fat JAR (JDK 21 accepts --enable-native-access).
+          java --enable-native-access=ALL-UNNAMED -cp "build\http2-client-1.0.0.jar" Test 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\java_test.log" -Append
+          if ($LASTEXITCODE -ne 0) { Write-Error "test failed"; exit 1 }
+          Write-Output "---"
+          if (Select-String -Path "${{ github.workspace }}\java_test.log" -Pattern "All tests passed" -Quiet) {
+            Write-Output "::notice:: Java test PASSED"
+          } else {
+            Write-Error "Java test did not report success"
+            exit 1
+          }
 
       - name: Upload Java test log
         if: always()
