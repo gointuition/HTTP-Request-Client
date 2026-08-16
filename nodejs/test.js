@@ -49,6 +49,8 @@ async function runTests() {
         const result = httpClient.request(JSON.parse(requestStr));
         const parsed = JSON.parse(result);
 
+        console.log(parsed.response.payload)
+
         const endTime = Date.now();
 
         // Validate: error must be empty, status 2xx, payload non-empty

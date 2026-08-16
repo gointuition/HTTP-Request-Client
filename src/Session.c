@@ -500,12 +500,26 @@ static void createSession(Basket *basket) {
     SSL_get0_alpn_selected(ssl, &alpnProto, &alpnLen);
 
     if (alpnLen != 2 || memcmp(alpnProto, "h2", 2) != 0) {
+        // capture the actual negotiated protocol BEFORE freeSession(): SSL_shutdown/SSL_free
+        // may invalidate the ALPN buffer returned by SSL_get0_alpn_selected, so snapshot it now.
+        char negotiated[32];
+        if (alpnLen > 0 && alpnLen < sizeof(negotiated)) {
+            memcpy(negotiated, alpnProto, alpnLen);
+            negotiated[alpnLen] = '\0';
+        } else {
+            negotiated[0] = '\0';
+        }
+
         SSL_set_app_data(ssl, NULL);
         free(connInfo);
         freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
 
-        LOG("ERROR", "ALPN negotiation failed");
-        basket -> error = ERR_SESSION_SSL_CONNECT_FAILED;
+        if (negotiated[0] != '\0') {
+            LOG("ERROR", "ALPN negotiation failed: server selected \"%s\" instead of \"h2\"", negotiated);
+        } else {
+            LOG("ERROR", "ALPN negotiation failed: server did not select any protocol (expected \"h2\")");
+        }
+        basket -> error = ERR_SESSION_SSL_ALPN_HTTP2_NOT_SELECTED;
         return;
     }
 

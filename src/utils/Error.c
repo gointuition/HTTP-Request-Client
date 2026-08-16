@@ -36,6 +36,7 @@ const Error ERR_SESSION_FAILED_TO_CONNECT_TO_SHARED_MEMORY_POOL     = { "1-0016"
 const Error ERR_SESSION_SOCKET_CONNECTING_REFUSED                   = { "1-0017", "Session socket connection refused."};
 const Error ERR_SESSION_SETTINGS_TIMEOUT                            = { "1-0018", "Session settings timeout."};
 const Error ERR_SESSION_GO_AWAY                                     = { "1-0019", "Session goes away without error."};
+const Error ERR_SESSION_SSL_ALPN_HTTP2_NOT_SELECTED                 = { "1-0020", "ALPN negotiation did not select h2; server likely only supports http/1.1."};
 
 // Request errors
 const Error ERR_REQUEST_PARSING_STRING_TO_JSON_FAILED               = { "2-0001", "Parsing request string to json failed."};
