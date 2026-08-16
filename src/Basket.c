@@ -182,8 +182,12 @@ static void parseHeaders(Basket *basket, json_t *jsonRequest) {
 static void parsePayload(Basket *basket, const json_t *jsonRequest) {
     const json_t *jsonPayload = json_object_get(jsonRequest, "payload");
     if (jsonPayload != NULL) {
-        // TODO JSON_INDENT, JSON_ENSURE_ASCII, JSON_SORT_KEYS, JSON_PRESERVE_ORDER, JSON_ENCODE_ANY
-        basket -> request.payload = json_dumps(jsonPayload, JSON_COMPACT);
+        if (json_is_string(jsonPayload)) {
+            basket -> request.payload = strdup(json_string_value(jsonPayload));
+        } else {
+            // TODO JSON_INDENT, JSON_ENSURE_ASCII, JSON_SORT_KEYS, JSON_PRESERVE_ORDER, JSON_ENCODE_ANY
+            basket -> request.payload = json_dumps(jsonPayload, JSON_COMPACT);
+        }
         size_t actualLen = strlen(basket -> request.payload);
         LOG("INFO", "payload: %s\n length: %zu", basket -> request.payload, actualLen);
         if (basket -> request.containsContentLength != 1) {

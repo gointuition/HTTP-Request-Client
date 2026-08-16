@@ -149,7 +149,7 @@ char* handleRequest(const char *requestJSONString, int *outLen) {
     if (basket != NULL && basket -> error.code == NULL) {
         for (int attempt = 0; attempt < 2; ++attempt) {
             Stream *stream = NULL;
-            if (http2StartRequest(basket, &stream) == 0) {
+            if (http2StartRequest(basket, &stream) == 0 && stream != NULL) {
                 // 2. wait for the reader thread to finish this stream, then move
                 //    the collected headers/payload into the basket (and decompress)
                 awaitStream(basket, stream);
