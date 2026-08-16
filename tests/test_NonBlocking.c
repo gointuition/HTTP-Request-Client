@@ -13,9 +13,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+// POSIX sleep; MinGW provides this without pulling in <windows.h> (which would
+// collide with the project's ERROR_TIMEOUT / X509_NAME symbols).
+#include <unistd.h>
+
 #include "jansson.h"
 
-#include "Compat.h"
 #include "File.h"
 #include "Http2Client.h"
 #include "Log.h"
@@ -177,7 +180,7 @@ int main(int argc, char *argv[]) {
             ids[i] = 0; // mark reaped
         }
         if (pending > 0) {
-            sleepMicroseconds(5000);
+            usleep(5000); // 5 ms poll interval
         }
     }
 
