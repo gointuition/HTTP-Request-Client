@@ -198,16 +198,13 @@ jobs:
         run: |
           set -o pipefail
           # The manylinux_2_28 container ships no Maven (setup-java only provides
-          # the JDK). Download a Maven binary into /opt and put it on PATH so
-          # java/build.sh finds `mvn`.
-          MAVEN_VERSION=3.9.9
-          if ! command -v mvn >/dev/null 2>&1; then
-            curl -fsSLO "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
-            tar -xzf "apache-maven-${MAVEN_VERSION}-bin.tar.gz" -C /opt
-            echo "/opt/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
-            export PATH="/opt/apache-maven-${MAVEN_VERSION}/bin:$PATH"
-          fi
-          mvn --version | head -1
+          # the JDK). The Java binding ships a Maven Wrapper (./mvnw), so
+          # java/build.sh downloads a pinned Maven from Maven Central
+          # (repo.maven.apache.org) — stable and immune to the intermittent
+          # rate-limiting / truncated-download failures that apache.org's
+          # dlcdn / archive hosts hit on CI runners (which surface as
+          # "Could not find or load main class
+          # org.codehaus.plexus.classworlds.launcher.Launcher").
           cd "$GITHUB_WORKSPACE/java"
           bash build.sh 2>&1 | tee "$GITHUB_WORKSPACE/java_test.log"
           echo "---"
@@ -705,17 +702,13 @@ jobs:
             export PATH="$JAVA_HOME/bin:$PATH"
           fi
           java -version
-          # Maven: MSYS2 does not inherit GITHUB_PATH; download the binary
-          # inside the MSYS2 context so mvn is on PATH.
-          MAVEN_VERSION=3.9.9
-          curl -fsSLO "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.zip"
-          unzip -qo "apache-maven-${MAVEN_VERSION}-bin.zip" -d /tmp
-          export PATH="/tmp/apache-maven-${MAVEN_VERSION}/bin:$PATH"
-          mvn --version
-          # NOTE: MSYS2_ARG_CONV_EXCL is set inside build.sh right before
-          # the mvn clean package call (per java/README.md).  Do NOT set it
-          # here — it would also disable conversion for Maven's own shell
-          # launcher and break classpath resolution.
+          # Maven: the Java binding ships a Maven Wrapper (./mvnw), so build.sh
+          # downloads a pinned Maven from Maven Central (repo.maven.apache.org)
+          # — stable and immune to the intermittent rate-limiting /
+          # truncated-download failures that apache.org's dlcdn / archive hosts
+          # hit on CI runners (which surface as "Could not find or load main
+          # class org.codehaus.plexus.classworlds.launcher.Launcher"). No manual
+          # Maven download is needed here.
           cd "${{ github.workspace }}/java"
           bash build.sh 2>&1 | tee "${{ github.workspace }}/java_test.log"
           echo "---"

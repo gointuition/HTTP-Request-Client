@@ -92,14 +92,28 @@ export JAVA_HOME
 echo "JAVA_HOME: $JAVA_HOME"
 
 # Check Maven
+# Prefer the Maven Wrapper (./mvnw) when present: it downloads a pinned Maven
+# from Maven Central (repo.maven.apache.org), which is stable and does not
+# suffer the rate-limiting / truncated-download failures that apache.org's
+# dlcdn / archive hosts intermittently hit on CI runners (which surface as
+# "Could not find or load main class
+# org.codehaus.plexus.classworlds.launcher.Launcher"). Fall back to a system
+# `mvn` only if there is no wrapper.
 echo ""
-if ! command -v mvn >/dev/null 2>&1; then
-    echo "Error: Maven (mvn) not found."
-    echo "  macOS:   brew install maven"
-    echo "  Windows: download from https://maven.apache.org/download.cgi and add bin/ to PATH"
-    exit 1
+MVN="mvn"
+if [ -x "$SCRIPT_DIR/mvnw" ]; then
+    MVN="$SCRIPT_DIR/mvnw"
+    echo "Using Maven Wrapper: $MVN"
+else
+    if ! command -v mvn >/dev/null 2>&1; then
+        echo "Error: Maven (mvn) not found and no Maven Wrapper (./mvnw) present."
+        echo "  macOS:   brew install maven"
+        echo "  Windows: download from https://maven.apache.org/download.cgi and add bin/ to PATH"
+        echo "  Or generate a wrapper: cd java && mvn -N wrapper:wrapper"
+        exit 1
+    fi
 fi
-mvn -version 2>&1 | head -1
+"$MVN" -version 2>&1 | head -1
 
 # On Windows (MSYS2), verify gcc is available for JNI bridge compilation
 if [[ "$OS_NAME" == MINGW* || "$OS_NAME" == MSYS* ]]; then
@@ -123,8 +137,8 @@ fi
 
 # ── Build everything through Maven ────────────────────────────────────
 echo ""
-echo "Running: mvn -f \"$SCRIPT_DIR/pom.xml\" clean package $JNI_COMPILER_FLAG"
-mvn -f "$SCRIPT_DIR/pom.xml" clean package $JNI_COMPILER_FLAG
+echo "Running: $MVN -f \"$SCRIPT_DIR/pom.xml\" clean package $JNI_COMPILER_FLAG"
+"$MVN" -f "$SCRIPT_DIR/pom.xml" clean package $JNI_COMPILER_FLAG
 
 echo ""
 echo "Fat JAR created: build/$JAR_NAME"
