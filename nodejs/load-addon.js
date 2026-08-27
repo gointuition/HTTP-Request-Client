@@ -4,18 +4,18 @@
 //
 // Resolution order:
 //   1. A prebuilt addon shipped inside this package under
-//      prebuilds/<platform>-<arch>/http2addon.node  (produced by CI and packed
+//      prebuilds/<platform>-<arch>/httpaddon.node  (produced by CI and packed
 //      into the published tarball). This lets `npm install ./pkg.tgz` work with
 //      zero compilation on the supported platforms.
-//   2. A locally compiled addon at build/Release/http2addon.node (source build).
+//   2. A locally compiled addon at build/Release/httpaddon.node (source build).
 //
 // Supported triplet suffixes match the artifacts published by CI (the release
 // job's plat_of() maps windows-latest -> "win", macos-latest -> "macos"):
-//   linux-x64    (libhttp2client.so)
-//   linux-arm64  (libhttp2client.so)
-//   macos-x64    (libhttp2client.dylib)
-//   macos-arm64  (libhttp2client.dylib, Apple Silicon)
-//   win-x64      (libhttp2client.dll + MinGW runtimes)
+//   linux-x64    (libhttpclient.so)
+//   linux-arm64  (libhttpclient.so)
+//   macos-x64    (libhttpclient.dylib)
+//   macos-arm64  (libhttpclient.dylib, Apple Silicon)
+//   win-x64      (libhttpclient.dll + MinGW runtimes)
 // Note: the directory uses "win"/"macos" (not "win32"/"darwin" from
 // process.platform), so we map process.platform to the published name.
 
@@ -37,7 +37,7 @@ function detectTriplet () {
   return map[`${platName}-${arch}`] || null
 }
 
-// On Linux and macOS the addon links against libhttp2client.so / .dylib which
+// On Linux and macOS the addon links against libhttpclient.so / .dylib which
 // is shipped in the same prebuilds/ dir (see CI release job). The dynamic
 // linker won't look there by default, so prepend the dir to LD_LIBRARY_PATH
 // (Linux) / DYLD_FALLBACK_LIBRARY_PATH (macOS) before loading the .node.
@@ -55,7 +55,7 @@ function loadAddon () {
   const triplet = detectTriplet()
   if (triplet) {
     const prebuildDir = path.join(__dirname, 'prebuilds', triplet)
-    const prebuild = path.join(prebuildDir, 'http2addon.node')
+    const prebuild = path.join(prebuildDir, 'httpaddon.node')
     if (fs.existsSync(prebuild)) {
       ensureLibPath(prebuildDir)
       return require(prebuild)
@@ -63,13 +63,13 @@ function loadAddon () {
   }
   // Fallback: compile from source (binding.gyp) — requires the C library built.
   const compiledDir = path.join(__dirname, 'build', 'Release')
-  const compiled = path.join(compiledDir, 'http2addon.node')
+  const compiled = path.join(compiledDir, 'httpaddon.node')
   if (fs.existsSync(compiled)) {
     ensureLibPath(compiledDir)
     return require(compiled)
   }
   throw new Error(
-    'http2 client native addon not found. Install a prebuilt package for ' +
+    'http client native addon not found. Install a prebuilt package for ' +
     `${process.platform}-${process.arch}, or run \`npm run build\` after building the C library.`
   )
 }

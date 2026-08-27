@@ -1,5 +1,5 @@
 """
-Type stubs for the HTTP/2 client Python binding.
+Type stubs for the HTTP client Python binding.
 Mirrors nodejs/index.d.ts.
 """
 

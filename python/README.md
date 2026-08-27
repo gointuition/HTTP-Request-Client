@@ -1,6 +1,6 @@
-# http2-client
+# http-client
 
-High-performance HTTP/2 client with native C implementation via cffi (ABI mode).
+High-performance HTTP client with native C implementation via cffi (ABI mode).
 
 ## Prerequisites
 
@@ -66,11 +66,11 @@ httpClient.cleanup()
 
 ### `httpClient.init()`
 
-Initialize the HTTP/2 client environment. Returns `self` for chaining.
+Initialize the HTTP client environment. Returns `self` for chaining.
 
 ### `httpClient.request(config)`
 
-Send an HTTP/2 request.
+Send an HTTP request.
 
 **Parameters:**
 - `config` (dict | str): Request configuration dict or JSON string
@@ -103,7 +103,7 @@ Cleanup resources and release memory.
 
 ### `session.clientHelloId`
 
-Optional uTLS-style identifier that pins the TLS/HTTP/2 wire fingerprint. When omitted, it follows the request's `User-Agent`, and an unrecognized `User-Agent` falls back to `hellochrome_auto`. Supported values: `hellochrome_auto`, `hellochrome_150`, `hellocrios_auto`, `hellocrios_150` (`_auto` tracks the latest version, `_<version>` pins a specific one; case-insensitive).
+Optional uTLS-style identifier that pins the TLS/HTTP wire fingerprint. When omitted, it follows the request's `User-Agent`, and an unrecognized `User-Agent` falls back to `hellochrome_auto`. Supported values: `hellochrome_auto`, `hellochrome_150`, `hellocrios_auto`, `hellocrios_150` (`_auto` tracks the latest version, `_<version>` pins a specific one; case-insensitive).
 
 ## Running Tests
 
@@ -122,9 +122,9 @@ bash python/build.sh
 
 ```
 Python (cffi ABI mode)
-  → ffi.dlopen("libhttp2client.dylib")
-    → C library (BoringSSL + nghttp2-style HTTP/2)
-      → HTTP/2 over TLS to server
+  → ffi.dlopen("libhttpclient.dylib")
+    → C library (BoringSSL + nghttp2-style HTTP)
+      → HTTP over TLS to server
 ```
 
 - **No C compiler required at runtime** — cffi ABI mode (`ffi.dlopen`) loads the pre-built shared library directly
@@ -137,46 +137,46 @@ Python (cffi ABI mode)
 pip install .
 ```
 
-Installs as `http2client` package. Requires `libhttp2client.dylib` (or `.so` on Linux) bundled alongside the module.
+Installs as `http-client` package. Requires `libhttpclient.dylib` (or `.so` on Linux) bundled alongside the module.
 
 ## Using the Release Artifacts
 
-Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships per-platform wheels that bundle `libhttp2client` inside the package, so `pip install` needs no compiler. A source sdist (`http2_client-<ver>.tar.gz`) is also published for platforms without a prebuilt wheel (you build `libhttp2client` locally before installing).
+Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships per-platform wheels that bundle `libhttpclient` inside the package, so `pip install` needs no compiler. A source sdist (`http_client-<ver>.tar.gz`) is also published for platforms without a prebuilt wheel (you build `libhttpclient` locally before installing).
 
 | Platform | File |
 | --- | --- |
-| Linux (x86_64, manylinux) | `http2_client-<ver>-py3-none-manylinux_2_17_x86_64.whl` |
-| macOS (x86_64) | `http2_client-<ver>-py3-none-macosx_11_0_x86_64.whl` |
-| Windows (x86_64) | `http2_client-<ver>-py3-none-win_amd64.whl` |
-| Source (any platform) | `http2_client-<ver>.tar.gz` (sdist) |
+| Linux (x86_64, manylinux) | `http_client-<ver>-py3-none-manylinux_2_17_x86_64.whl` |
+| macOS (x86_64) | `http_client-<ver>-py3-none-macosx_11_0_x86_64.whl` |
+| Windows (x86_64) | `http_client-<ver>-py3-none-win_amd64.whl` |
+| Source (any platform) | `http_client-<ver>.tar.gz` (sdist) |
 
 Install the wheel matching **your current platform**:
 
 ```bash
 # Linux
-pip install ./http2_client-1.0.0-py3-none-manylinux_2_17_x86_64.whl
+pip install ./http_client-1.0.0-py3-none-manylinux_2_17_x86_64.whl
 # macOS
-pip install ./http2_client-1.0.0-py3-none-macosx_11_0_x86_64.whl
+pip install ./http_client-1.0.0-py3-none-macosx_11_0_x86_64.whl
 # Windows
-pip install ./http2_client-1.0.0-py3-none-win_amd64.whl
+pip install ./http_client-1.0.0-py3-none-win_amd64.whl
 ```
 
 ```python
-import http2_client
-client = http2_client.Http2Client()
+import http_client
+client = http_client.HttpClient()
 # ...
 ```
 
-Installing the wheel also places `libhttp2client` inside the package, so no loader-path setup is needed. (`cffi` is pulled in automatically via `install_requires`.)
+Installing the wheel also places `libhttpclient` inside the package, so no loader-path setup is needed. (`cffi` is pulled in automatically via `install_requires`.)
 
 > **Why a separate package per platform?** The wheel bundles a platform-specific
-> native library (`libhttp2client.so` / `.dylib` / `.dll`). cffi loads it via
+> native library (`libhttpclient.so` / `.dylib` / `.dll`). cffi loads it via
 > `dlopen` at runtime, so the wheel must be built on and tagged for the exact
 > target platform — the same constraint as numpy, grpcio, etc.
 
 ### Cross-platform deployment (important)
 
-Your Python **source code** is platform-independent, but `http2_client` depends on
+Your Python **source code** is platform-independent, but `http_client` depends on
 a native library that is **not**. The rule of thumb (same as numpy, grpcio, …):
 
 > **Source is portable; dependencies are not. Re-install the package on the
@@ -187,7 +187,7 @@ So if you write the program on macOS and run it on a Linux server:
 ```bash
 # 1. Copy your .py source to the Linux server (e.g. scp / git clone)
 # 2. On the Linux server — install the MATCHING wheel, NOT the macOS one:
-pip install ./http2_client-1.0.0-py3-none-manylinux_2_17_x86_64.whl
+pip install ./http_client-1.0.0-py3-none-manylinux_2_17_x86_64.whl
 python your_app.py
 ```
 
@@ -197,13 +197,13 @@ inside it cannot be loaded by Linux.
 **Alternatives:**
 
 - **Containerize (recommended for servers):** put your code in a Docker image and
-  `pip install http2_client` inside the **Linux** image, so code + dependency +
+  `pip install http_client` inside the **Linux** image, so code + dependency +
   platform are locked together and runnable anywhere Docker exists.
 - **No prebuilt wheel for your platform?** Install the source distribution and
   build the native library yourself on the target machine:
   ```bash
-  # build libhttp2client first (see project root README "Building"), then:
-  pip install ./http2_client-1.0.0.tar.gz
+  # build libhttpclient first (see project root README "Building"), then:
+  pip install ./http_client-1.0.0.tar.gz
   ```
 
 ## License

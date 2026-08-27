@@ -12,7 +12,7 @@
 #include "jansson.h"
 
 #include "File.h"
-#include "Http2Client.h"
+#include "HttpClient.h"
 
 #define DEFAULT_CONCURRENCY 8
 

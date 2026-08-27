@@ -1,5 +1,5 @@
 """
-High-performance HTTP/2 client with native C implementation.
+High-performance HTTP client with native C implementation.
 
 Usage:
     from python import httpClient
@@ -9,7 +9,7 @@ Usage:
     httpClient.cleanup()
 """
 
-from .http2_client import HttpClient
+from .http_client import HttpClient
 
 # Singleton instance (mirrors nodejs/index.js pattern)
 httpClient = HttpClient()

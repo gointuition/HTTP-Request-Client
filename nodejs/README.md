@@ -1,6 +1,6 @@
 # @gointuition/http-client
 
-High-performance HTTP/2 client with native C implementation using N-API.
+High-performance HTTP client with native C implementation using N-API.
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ cd <project_root>
 cmake -B build && cmake --build build -j$(nproc)
 ```
 
-This produces `lib/shared/libhttp2client.{dylib,so,dll}`.
+This produces `lib/shared/libhttpclient.{dylib,so,dll}`.
 
 ### 2. Install the addon
 
@@ -20,7 +20,7 @@ For **development from source** (builds the native addon locally via node-gyp):
 ```bash
 cd nodejs
 npm install        # installs devDependencies
-npm run build      # compiles http2addon.node from source
+npm run build      # compiles httpaddon.node from source
 ```
 
 For **consuming the published package**, no compilation is needed — the npm
@@ -33,8 +33,8 @@ On Windows the project uses a **split toolchain**:
 
 | Component | Compiler | Output |
 |-----------|----------|--------|
-| C library | MinGW-w64 (MSYS2 MINGW64) | `libhttp2client.dll` |
-| Node.js addon | MSVC (node-gyp default) | `http2addon.node` |
+| C library | MinGW-w64 (MSYS2 MINGW64) | `libhttpclient.dll` |
+| Node.js addon | MSVC (node-gyp default) | `httpaddon.node` |
 
 **Requirements:**
 
@@ -59,13 +59,13 @@ npm run build
 ```
 
 `build-addon.js` automates the entire process:
-1. Generates `http2client.lib` (MSVC import library) from `libhttp2client.dll` using `gendef` + `lib.exe`
+1. Generates `httpclient.lib` (MSVC import library) from `libhttpclient.dll` using `gendef` + `lib.exe`
 2. Runs `node-gyp rebuild` (MSVC compiles the addon)
 3. Copies runtime DLLs to `build/Release/`:
-   - `libhttp2client.dll`
+   - `libhttpclient.dll`
    - `libwinpthread-1.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll` (MinGW runtime)
 
-> **Note:** zlib is statically linked into `libhttp2client.dll`, so no external zlib DLL is needed.
+> **Note:** zlib is statically linked into `libhttpclient.dll`, so no external zlib DLL is needed.
 
 ## Usage
 
@@ -119,7 +119,7 @@ httpClient.cleanup();
 runs on a libuv worker thread; requests issued together execute in parallel up
 to the libuv thread-pool size (default **4** — raise it via `UV_THREADPOOL_SIZE`,
 see [Concurrency & Multiplexing](#concurrency--multiplexing)). Same-host
-requests share **one** HTTP/2 connection and each takes its own stream, so they
+requests share **one** HTTP connection and each takes its own stream, so they
 are multiplexed rather than serialized.
 
 ```javascript
@@ -145,11 +145,11 @@ httpClient.cleanup();
 
 ### `httpClient.init()`
 
-Initialize the HTTP/2 client environment. Returns `this` for chaining.
+Initialize the HTTP client environment. Returns `this` for chaining.
 
 ### `httpClient.request(config)`
 
-Send an HTTP/2 request.
+Send an HTTP request.
 
 **Parameters:**
 - `config` (Object | string): Request configuration object or JSON string
@@ -162,13 +162,13 @@ Send an HTTP/2 request.
 
 ### `httpClient.requestAsync(config)`
 
-Send an HTTP/2 request asynchronously. The underlying native call is
+Send an HTTP request asynchronously. The underlying native call is
 **blocking** (it does synchronous socket I/O in C), so `requestAsync` offloads
 it to a libuv worker thread to keep the JS event loop responsive. Multiple
 pending requests therefore run in parallel only up to the size of the libuv
 thread pool — see [Concurrency & Multiplexing](#concurrency--multiplexing) for
 how to raise it with `UV_THREADPOOL_SIZE`. Same-host requests are multiplexed
-over a single HTTP/2 connection (each on its own stream).
+over a single HTTP connection (each on its own stream).
 
 **Parameters:**
 - `config` (Object | string): Request configuration object or JSON string
@@ -211,7 +211,7 @@ Cleanup resources and release memory.
 | `expirationInMilliseconds` | `number` | Session expiration timeout |
 | `clientHelloId` | `string?` | uTLS-style fingerprint profile to emulate (see below) |
 
-Optional `clientHelloId` pins the TLS/HTTP/2 wire fingerprint. When omitted, it follows the request's `User-Agent`, and an unrecognized `User-Agent` falls back to `hellochrome_auto`. Supported values: `hellochrome_auto`, `hellochrome_150`, `hellocrios_auto`, `hellocrios_150` (`_auto` tracks the latest version, `_<version>` pins a specific one; case-insensitive).
+Optional `clientHelloId` pins the TLS/HTTP wire fingerprint. When omitted, it follows the request's `User-Agent`, and an unrecognized `User-Agent` falls back to `hellochrome_auto`. Supported values: `hellochrome_auto`, `hellochrome_150`, `hellocrios_auto`, `hellocrios_150` (`_auto` tracks the latest version, `_<version>` pins a specific one; case-insensitive).
 
 ## Response Structure
 
@@ -260,9 +260,9 @@ npm test
 
 ```
 Node.js (N-API)
-  → ./build/Release/http2addon.node
-    → C library (BoringSSL + HTTP/2)
-      → HTTP/2 over TLS to server
+  → ./build/Release/httpaddon.node
+    → C library (BoringSSL + HTTP)
+      → HTTP over TLS to server
 ```
 
 - **No FFI overhead** — direct native binding via N-API
@@ -272,7 +272,7 @@ Node.js (N-API)
 
 ## Concurrency & Multiplexing
 
-`requestAsync` makes HTTP/2 multiplexing usable from JavaScript:
+`requestAsync` makes HTTP multiplexing usable from JavaScript:
 
 - **Shared connection** — concurrent same-host requests reuse one connection
   (session creation is serialized in the C core, so a burst of requests does not
@@ -324,13 +324,13 @@ or `dns.lookup` work.
 
 ## Using the Release Artifacts
 
-Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships a standard npm package `http2-client-nodejs-<ver>.tgz` with prebuilt addons under `prebuilds/<plat>-x64/http2addon.node`. Install it directly from the asset (no registry needed):
+Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships a standard npm package `http-client-nodejs-<ver>.tgz` with prebuilt addons under `prebuilds/<plat>-x64/httpaddon.node`. Install it directly from the asset (no registry needed):
 
 ```bash
-npm install ./http2-client-nodejs-1.0.2.tgz
+npm install ./http-client-nodejs-1.0.2.tgz
 ```
 
-`load-addon.js` selects the matching `prebuilds/<plat>-x64/http2addon.node` automatically — **no compilation**. The addon still needs `libhttp2client` next to it (or on the loader path), so also install the C library from the `http2client-<ver>-all.tar.gz` release asset.
+`load-addon.js` selects the matching `prebuilds/<plat>-x64/httpaddon.node` automatically — **no compilation**. The addon still needs `libhttpclient` next to it (or on the loader path), so also install the C library from the `httpclient-<ver>-all.tar.gz` release asset.
 
 The native request is synchronous/blocking; `requestAsync` runs calls on libuv worker threads (default pool size 4). Raise the pool for real concurrency:
 

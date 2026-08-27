@@ -10,7 +10,7 @@ include_directories(${CMAKE_BINARY_DIR}/generated)
 # link libs directories
 link_directories(${LIB_PATH})
 # link libs
-link_libraries(${HTTP2_CLIENT})
+link_libraries(${HTTP_CLIENT})
 
 set(EXECUTABLE_OUTPUT_PATH ${EXEC_PATH})
 
@@ -51,13 +51,13 @@ foreach (source_file ${SRC})
     )
 
     # Windows: the loader only searches the executable's own directory (and PATH),
-    # not lib/shared, so copy libhttp2client.dll next to the test executable.
+    # not lib/shared, so copy libhttpclient.dll next to the test executable.
     if (WIN32)
         add_custom_command(TARGET ${target_name} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:${HTTP2_CLIENT}>
+                $<TARGET_FILE:${HTTP_CLIENT}>
                 $<TARGET_FILE_DIR:${target_name}>
-                COMMENT "Copying libhttp2client.dll next to ${target_name}"
+                COMMENT "Copying libhttpclient.dll next to ${target_name}"
         )
     endif ()
 endforeach ()

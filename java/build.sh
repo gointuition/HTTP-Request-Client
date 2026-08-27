@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # java/build.sh
 #
-# Build script for HTTP/2 Java binding (JNI) — Maven driven.
+# Build script for HTTP Java binding (JNI) — Maven driven.
 # Mirrors nodejs/build.sh and python/build.sh.
 #
 # All build steps live in pom.xml and run via `mvn clean package`:
@@ -12,7 +12,7 @@
 
 set -e
 
-echo "=== Building HTTP/2 Java Binding (JNI, Maven) ==="
+echo "=== Building HTTP Java Binding (JNI, Maven) ==="
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -24,10 +24,10 @@ echo "Java binding directory: $SCRIPT_DIR"
 # Check if the prebuilt native C library exists
 OS_NAME="$(uname)"
 case "$OS_NAME" in
-    Darwin)  LIB_NAME="libhttp2client.dylib" ;;
-    Linux)   LIB_NAME="libhttp2client.so" ;;
-    MINGW*|MSYS*|CYGWIN*)  LIB_NAME="libhttp2client.dll" ;;
-    *)       LIB_NAME="libhttp2client.so" ;;
+    Darwin)  LIB_NAME="libhttpclient.dylib" ;;
+    Linux)   LIB_NAME="libhttpclient.so" ;;
+    MINGW*|MSYS*|CYGWIN*)  LIB_NAME="libhttpclient.dll" ;;
+    *)       LIB_NAME="libhttpclient.so" ;;
 esac
 
 if [ ! -f "$PROJECT_ROOT/lib/shared/$LIB_NAME" ]; then
@@ -125,11 +125,11 @@ if [[ "$OS_NAME" == MINGW* || "$OS_NAME" == MSYS* ]]; then
 fi
 
 VERSION="1.0.0"
-JAR_NAME="http2-client-${VERSION}.jar"
+JAR_NAME="http-client-${VERSION}.jar"
 
 # On Windows (MSYS2), override the Maven windows profile's default MSVC
 # compiler with gcc so the JNI bridge links against the MinGW-built
-# libhttp2client.dll without needing an import library.
+# libhttpclient.dll without needing an import library.
 JNI_COMPILER_FLAG=""
 if [[ "$OS_NAME" == MINGW* || "$OS_NAME" == MSYS* ]]; then
     JNI_COMPILER_FLAG="-Djni.compiler=gcc"
@@ -162,6 +162,6 @@ echo "To use in your project:"
 echo "  java $NATIVE_ACCESS_FLAG -cp build/$JAR_NAME Example"
 echo ""
 echo "Java code:"
-echo "  Http2Client.init();"
-echo "  String result = Http2Client.request(\"{...}\");"
-echo "  Http2Client.cleanup();"
+echo "  HttpClient.init();"
+echo "  String result = HttpClient.request(\"{...}\");"
+echo "  HttpClient.cleanup();"

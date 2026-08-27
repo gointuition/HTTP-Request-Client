@@ -19,7 +19,7 @@ extern "C" {
 static int envInitialized = 0;
 
 /**
- * Initialize HTTP/2 client environment
+ * Initialize HTTP client environment
  */
 napi_value InitEnv(napi_env env, napi_callback_info info) {
     if (!envInitialized) {
@@ -33,7 +33,7 @@ napi_value InitEnv(napi_env env, napi_callback_info info) {
 }
 
 /**
- * Cleanup HTTP/2 client environment
+ * Cleanup HTTP client environment
  */
 napi_value CleanupEnv(napi_env env, napi_callback_info info) {
     if (envInitialized) {
@@ -47,7 +47,7 @@ napi_value CleanupEnv(napi_env env, napi_callback_info info) {
 }
 
 /**
- * Handle HTTP/2 request with automatic buffer management
+ * Handle HTTP request with automatic buffer management
  */
 napi_value HandleRequest(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -138,7 +138,7 @@ napi_value HandleRequest(napi_env env, napi_callback_info info) {
 // loop. Instead we copy the input JSON on the JS thread, run handleRequest on a
 // libuv worker thread, and resolve a Promise on the JS thread with the result.
 // Multiple pending Promises therefore execute concurrently across the pool, and
-// the C core multiplexes same-host requests over one HTTP/2 connection.
+// the C core multiplexes same-host requests over one HTTP connection.
 struct AsyncRequest {
     napi_deferred   deferred;
     napi_async_work work;
@@ -185,7 +185,7 @@ static void CompleteRequest(napi_env env, napi_status status, void *data) {
 }
 
 /**
- * Handle HTTP/2 request asynchronously, returning a Promise. The blocking C
+ * Handle HTTP request asynchronously, returning a Promise. The blocking C
  * call runs on a libuv worker thread so concurrent requests run in parallel.
  */
 napi_value HandleRequestAsync(napi_env env, napi_callback_info info) {
@@ -250,7 +250,7 @@ napi_value HandleRequestAsync(napi_env env, napi_callback_info info) {
     }
 
     napi_value resourceName;
-    napi_create_string_utf8(env, "http2HandleRequest", NAPI_AUTO_LENGTH, &resourceName);
+    napi_create_string_utf8(env, "httpHandleRequest", NAPI_AUTO_LENGTH, &resourceName);
     status = napi_create_async_work(env, nullptr, resourceName,
                                     ExecuteRequest, CompleteRequest, req, &req->work);
     if (status != napi_ok) {

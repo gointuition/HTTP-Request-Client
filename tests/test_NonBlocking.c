@@ -20,7 +20,7 @@
 #include "jansson.h"
 
 #include "File.h"
-#include "Http2Client.h"
+#include "HttpClient.h"
 #include "Log.h"
 
 #define MAX_REQUESTS 64

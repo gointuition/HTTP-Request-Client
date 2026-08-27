@@ -1,24 +1,24 @@
 //
 //  Version.c
-//  HTTP2
+//  HTTP
 //
-//  Runtime version query implementation for libhttp2client.
+//  Runtime version query implementation for libhttpclient.
 //
 
 #include "Version.h"
 
-const char* http2client_version(void) {
-    return HTTP2CLIENT_VERSION_STRING;
+const char* httpclient_version(void) {
+    return HTTPCLIENT_VERSION_STRING;
 }
 
-int http2client_version_major(void) {
-    return HTTP2CLIENT_VERSION_MAJOR;
+int httpclient_version_major(void) {
+    return HTTPCLIENT_VERSION_MAJOR;
 }
 
-int http2client_version_minor(void) {
-    return HTTP2CLIENT_VERSION_MINOR;
+int httpclient_version_minor(void) {
+    return HTTPCLIENT_VERSION_MINOR;
 }
 
-int http2client_version_patch(void) {
-    return HTTP2CLIENT_VERSION_PATCH;
+int httpclient_version_patch(void) {
+    return HTTPCLIENT_VERSION_PATCH;
 }

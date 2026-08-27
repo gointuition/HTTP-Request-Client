@@ -1,14 +1,14 @@
 /*
- * Http2Client.java
+ * HttpClient.java
  *
- * HTTP/2 Client - Java binding via JNI.
+ * HTTP Client - Java binding via JNI.
  *
- * Mirrors python/http2_client.py and nodejs/http2-addon.cc:
- * wraps the native C library (libhttp2client.dylib) and exposes
+ * Mirrors python/http_client.py and nodejs/http-addon.cc:
+ * wraps the native C library (libhttpclient.dylib) and exposes
  * init() / request() / cleanup().
  *
  * Uses JNI (Java Native Interface) - requires a compiled JNI bridge
- * library (libhttp2jni.dylib) that links against libhttp2client.
+ * library (libhttpjni.dylib) that links against libhttpclient.
  */
 
 import java.io.File;
@@ -18,21 +18,21 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 
-public class Http2Client {
+public class HttpClient {
 
     private static volatile boolean initialized = false;
     private static final int BUFFER_SIZE = 1024 * 1024; // 1 MB, same as nodejs/python
 
-    // ── Native method declarations (implemented in Http2Client.c) ──────────
+    // ── Native method declarations (implemented in HttpClient.c) ──────────
 
     /**
-     * Initialize the native HTTP/2 client environment.
+     * Initialize the native HTTP client environment.
      * Corresponds to C: initialiseEnv()
      */
     private static native void nativeInit();
 
     /**
-     * Send an HTTP/2 request.
+     * Send an HTTP request.
      * Corresponds to C: handleRequest(const char*, char*, size_t)
      *
      * @param requestJson JSON string describing the request config.
@@ -68,10 +68,10 @@ public class Http2Client {
     // ── Library loading ──────────────────────────────────────────────────
 
     static {
-        // Load libhttp2client first (provides initialiseEnv/handleRequest/etc.),
-        // then load the JNI bridge (libhttp2jni) which links against it.
-        loadNativeLibrary("libhttp2client");
-        loadNativeLibrary("libhttp2jni");
+        // Load libhttpclient first (provides initialiseEnv/handleRequest/etc.),
+        // then load the JNI bridge (libhttpjni) which links against it.
+        loadNativeLibrary("libhttpclient");
+        loadNativeLibrary("libhttpjni");
     }
 
     /**
@@ -91,7 +91,7 @@ public class Http2Client {
     }
 
     /**
-     * Locate and load a native library by base name (e.g. "libhttp2jni").
+     * Locate and load a native library by base name (e.g. "libhttpjni").
      *
      * Search order:
      *   1. JAR resource:  /native/<plat>/<baseName><ext>  (cross-platform fat JAR)
@@ -112,10 +112,10 @@ public class Http2Client {
         //    Cross-platform JARs nest natives under /native/<plat>/; single-platform
         //    (or locally-built) JARs keep them directly under /native/. Try both.
         String resourcePath = "/native/" + platformDir() + "/" + fileName;
-        URL resourceUrl = Http2Client.class.getResource(resourcePath);
+        URL resourceUrl = HttpClient.class.getResource(resourcePath);
         if (resourceUrl == null) {
             resourcePath = "/native/" + fileName;
-            resourceUrl = Http2Client.class.getResource(resourcePath);
+            resourceUrl = HttpClient.class.getResource(resourcePath);
         }
         if (resourceUrl != null) {
             try {
@@ -130,7 +130,7 @@ public class Http2Client {
         }
 
         // 2) Search filesystem (development mode)
-        String codeSource = Http2Client.class.getProtectionDomain()
+        String codeSource = HttpClient.class.getProtectionDomain()
                 .getCodeSource().getLocation().getPath();
         // URL-decode the path (handles spaces etc.)
         codeSource = java.net.URLDecoder.decode(codeSource, java.nio.charset.StandardCharsets.UTF_8);
@@ -185,17 +185,17 @@ public class Http2Client {
      */
     private static File extractToTemp(String resourcePath, String fileName) throws IOException {
         // Extract into a per-version subdirectory but keep the REAL library
-        // filename. This lets a co-located dependent library (libhttp2jni ->
-        // libhttp2client) be resolved via rpath ($ORIGIN on Linux, @loader_path
+        // filename. This lets a co-located dependent library (libhttpjni ->
+        // libhttpclient) be resolved via rpath ($ORIGIN on Linux, @loader_path
         // on macOS) at load time. A version-suffixed filename would break the
         // name-based lookup on Linux and cause "undefined symbol" errors.
         File tempDir = new File(System.getProperty("java.io.tmpdir"),
-                "http2client-native" + File.separator + getVersion());
+                "httpclient-native" + File.separator + getVersion());
         tempDir.mkdirs();
         File tempFile = new File(tempDir, fileName);
         tempFile.deleteOnExit();
 
-        try (InputStream in = Http2Client.class.getResourceAsStream(resourcePath)) {
+        try (InputStream in = HttpClient.class.getResourceAsStream(resourcePath)) {
             if (in == null) {
                 throw new IOException("Resource not found: " + resourcePath);
             }
@@ -207,7 +207,7 @@ public class Http2Client {
     // ── Public API (mirrors nodejs/python bindings) ──────────────────────
 
     /**
-     * Initialize the HTTP/2 client environment.
+     * Initialize the HTTP client environment.
      * Returns true for consistency (mirrors nodejs InitEnv).
      */
     public static boolean init() {
@@ -219,7 +219,7 @@ public class Http2Client {
     }
 
     /**
-     * Send an HTTP/2 request.
+     * Send an HTTP request.
      *
      * @param requestJson JSON string describing the request config.
      * @return Response JSON string from native library.

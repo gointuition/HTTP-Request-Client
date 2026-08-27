@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-HTTP/2 Client — Concurrency Test
+HTTP Client — Concurrency Test
 
-Tests HTTP/2 multiplexing: multiple concurrent requests sharing
+Tests HTTP multiplexing: multiple concurrent requests sharing
 one connection, each taking its own odd stream id (1, 3, 5, ...).
 """
 
@@ -52,19 +52,19 @@ def do_request(index, config):
 
 
 def main():
-    print("=== HTTP/2 Client — Concurrency Test ===\n")
+    print("=== HTTP Client — Concurrency Test ===\n")
     passed = 0
     failed = 0
     DEFAULT_CONCURRENCY = 8
 
     # Initialize
-    print("[Init] Initializing HTTP/2 client...")
+    print("[Init] Initializing HTTP client...")
     httpClient.init()
     print("[Init] Initialized\n")
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # Concurrent requests (HTTP/2 multiplexing).
+    # Concurrent requests (HTTP multiplexing).
     # cffi releases the GIL around the blocking native call, so a ThreadPoolExecutor
     # runs these in REAL parallel. Same-host requests share ONE multiplexed
     # connection, each taking its own odd stream id (1, 3, 5, ...). A warm-up request

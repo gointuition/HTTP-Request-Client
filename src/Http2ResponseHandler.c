@@ -2,7 +2,7 @@
 // Created by Intuition on 26-4-7.
 //
 
-#include "ResponseHandler.h"
+#include "Http2ResponseHandler.h"
 
 #include <string.h>
 #include <zlib.h>
@@ -113,7 +113,7 @@ typedef enum {
 
 static void handleDataFrame(Stream *stream, unsigned char *payload, uint32_t length);
 static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t length, uint8_t flags, HpackContext *ctx);
-static void handleRST_STREAMFrame(Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId);
+static void handleRST_STREAMFrame(Session *session, Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId);
 static void handleSettingsFrame(unsigned char *payload, uint32_t length);
 static void handleWindowUpdateFrame(unsigned char *payload, uint32_t length, uint32_t streamId);
 static void handleGoAwayFrame(Session *session, unsigned char *payload, uint32_t length);
@@ -156,7 +156,7 @@ void handleStreamFrame(Session *session, Stream *stream,
         }
         case 0x3: // RST_STREAM
             if (stream) {
-                handleRST_STREAMFrame(stream, payload, length, streamId);
+                handleRST_STREAMFrame(session, stream, payload, length, streamId);
                 stream -> isEnded = 1;
             }
             break;
@@ -324,15 +324,24 @@ static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t 
     decodeHeadersFrame(stream, payloadStart, payloadSize, ctx);
 }
 
-static void handleRST_STREAMFrame(Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId) {
+static void handleRST_STREAMFrame(Session *session, Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId) {
     // RST_STREAM frame payload is 4 bytes, including a 32 bits error code
     if (length == 4) {
         const uint32_t errorCode = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
         const char *errorName = getErrorName(errorCode);
         LOG("WARN", "RST_STREAM received for Stream %u. Error Code: 0x%x (%s)",
             streamId, errorCode, errorName);
-        stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
-        stream -> error.msg = errorName;
+        if (errorCode == 0xd) {
+            // HTTP_1_1_REQUIRED: the server refuses HTTP/2 on this connection;
+            // surface a retryable error so the request is retried over HTTP/1.1
+            // and stop reusing the connection.
+            stream -> error = ERR_SESSION_HTTP_1_1_REQUIRED;
+            session -> connError = ERR_SESSION_HTTP_1_1_REQUIRED;
+            session -> goingAway = 1;
+        } else {
+            stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
+            stream -> error.msg = errorName;
+        }
     } else {
         LOG("ERROR", "Invalid RST_STREAM frame length: %u", length);
         stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
@@ -403,6 +412,10 @@ static void handleGoAwayFrame(Session *session, unsigned char *payload, uint32_t
         // error so their request threads can retry on a fresh connection.
         if (errorCode == 0x4) {
             session -> connError = ERR_SESSION_SETTINGS_TIMEOUT;
+        } else if (errorCode == 0xd) {
+            // HTTP_1_1_REQUIRED: pending streams fail with this retryable error
+            // and are retried over a fresh HTTP/1.1 session.
+            session -> connError = ERR_SESSION_HTTP_1_1_REQUIRED;
         } else {
             session -> connError = ERR_SESSION_GO_AWAY;
         }

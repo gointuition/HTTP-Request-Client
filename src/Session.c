@@ -5,6 +5,7 @@
 #include "Session.h"
 
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #ifndef _WIN32
 #include <sys/select.h>
@@ -14,8 +15,8 @@
 
 #include "Compat.h"
 
-#include "RequestHandler.h"
-#include "ResponseHandler.h"
+#include "Http2RequestHandler.h"
+#include "Http2ResponseHandler.h"
 #include "SocketHandler.h"
 #include "SSLHandler.h"
 #include "BrowserHandler.h"
@@ -75,8 +76,13 @@ static pthread_mutex_t establishRegistryMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t sessionEstablishFallbackMutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void createSession(Basket *basket);
-static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * ssl, TLSConnInfo *connInfo);
+static void createPlainHttp11Session(Basket *basket);
+static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * ssl, TLSConnInfo *connInfo, HttpProtocol protocol);
 static void getSessionInfo(Basket * basket);
+static int sessionProtocolUsable(Session *session, Basket *basket);
+static int sessionInitFailed(Session *session, Basket *basket);
+static int alpnSelectedHttp2(const unsigned char *alpnProto, unsigned int alpnLen);
+static int alpnSelectedHttp11(const unsigned char *alpnProto, unsigned int alpnLen);
 static int isProxyError(Basket *basket);
 static void markProxySessionsGoingAway(Basket *basket);
 static void registerSession(Basket * basket);
@@ -282,7 +288,7 @@ void freeSession(SSL* ssl, SSL_CTX* ctx, int sockfd, HpackContext *hpackCtx, Err
 // include exactly the fields getSessionInfo() matches on, so two requests share
 // a lock iff they would share a session.
 static void buildSessionKey(Basket *basket, char *key, size_t size) {
-    snprintf(key, size, "%s://%s:%s#%s://%s:%s@%s|nb=%d",
+    snprintf(key, size, "%s://%s:%s#%s://%s:%s@%s|nb=%d|h1=%d",
              basket -> request.urlComponents.scheme,
              basket -> request.urlComponents.host,
              basket -> request.urlComponents.port,
@@ -290,13 +296,10 @@ static void buildSessionKey(Basket *basket, char *key, size_t size) {
              basket -> proxy.host,
              basket -> proxy.port,
              basket -> proxy.authorization,
-             basket -> nonBlocking);
+             basket -> nonBlocking,
+             basket -> forceHttp11);
 }
 
-// Find-or-create the per-target lock, take a reference, and lock it. Returns
-// NULL only if the table is full, in which case the caller falls back to the
-// global mutex. The reference taken under establishRegistryMutex guarantees the
-// slot cannot be reclaimed while we block on (and then hold) its lock.
 static EstablishLock* acquireEstablishLock(Basket *basket) {
     char key[2048];
     buildSessionKey(basket, key, sizeof(key));
@@ -364,6 +367,7 @@ static void getSessionInfo(Basket * basket) {
             && strcmp(pool.sessions[i] -> proxy.port, basket -> proxy.port) == 0
             && strcmp(pool.sessions[i] -> proxy.authorization, basket -> proxy.authorization) == 0
             && pool.sessions[i] -> nonBlocking == basket -> nonBlocking
+            && sessionProtocolUsable(pool.sessions[i], basket)
                 ) {
             const int connecting = isConnecting(pool.sessions[i]);
             if (connecting == 1) {
@@ -381,7 +385,31 @@ static void getSessionInfo(Basket * basket) {
     pthread_mutex_unlock(&pool.mutex);
 }
 
+static int sessionProtocolUsable(Session *session, Basket *basket) {
+    const int protocolCompatible = basket -> forceHttp11 == 0 || session -> protocol == HTTP_PROTOCOL_1_1;
+    const int busy = session -> protocol == HTTP_PROTOCOL_1_1 && session -> inflightCount > 0;
+    return protocolCompatible && !busy;
+}
+
+static int sessionInitFailed(Session *session, Basket *basket) {
+    return session == NULL || basket -> error.code != NULL;
+}
+
+static int alpnSelectedHttp2(const unsigned char *alpnProto, unsigned int alpnLen) {
+    return alpnLen == 2 && memcmp(alpnProto, "h2", 2) == 0;
+}
+
+static int alpnSelectedHttp11(const unsigned char *alpnProto, unsigned int alpnLen) {
+    return alpnLen == 8 && memcmp(alpnProto, "http/1.1", 8) == 0;
+}
+
 static void createSession(Basket *basket) {
+    const int plainHttp = strcasecmp(basket -> request.urlComponents.scheme, "http") == 0;
+    if (plainHttp) {
+        createPlainHttp11Session(basket);
+        return;
+    }
+
     int sockfd = -1;
     // create TCP connection
     if (strlen(basket -> proxy.host) > 0) {
@@ -412,6 +440,11 @@ static void createSession(Basket *basket) {
     if (configured == -1) {
         freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
         return;
+    }
+
+    if (basket -> forceHttp11) {
+        static const unsigned char alpnHttp11[] = { 8, 'h', 't', 't', 'p', '/', '1', '.', '1' };
+        SSL_set_alpn_protos(ssl, alpnHttp11, sizeof(alpnHttp11));
     }
 
     // SSL handshake
@@ -494,12 +527,21 @@ static void createSession(Basket *basket) {
         return;
     }
 
-    // verify HTTP/2 negotiation
     const unsigned char *alpnProto;
     unsigned int alpnLen;
     SSL_get0_alpn_selected(ssl, &alpnProto, &alpnLen);
 
-    if (alpnLen != 2 || memcmp(alpnProto, "h2", 2) != 0) {
+    HttpProtocol protocol;
+    if (!basket -> forceHttp11 && alpnSelectedHttp2(alpnProto, alpnLen)) {
+        protocol = HTTP_PROTOCOL_2;
+    } else if (basket -> forceHttp11 || alpnSelectedHttp11(alpnProto, alpnLen) || alpnLen == 0) {
+        protocol = HTTP_PROTOCOL_1_1;
+        if (alpnLen > 0) {
+            LOG("INFO", "ALPN selected \"%.*s\": connection downgraded to HTTP/1.1", (int) alpnLen, (const char *) alpnProto);
+        } else {
+            LOG("INFO", "ALPN selected nothing: connection downgraded to HTTP/1.1");
+        }
+    } else {
         // capture the actual negotiated protocol BEFORE freeSession(): SSL_shutdown/SSL_free
         // may invalidate the ALPN buffer returned by SSL_get0_alpn_selected, so snapshot it now.
         char negotiated[32];
@@ -514,11 +556,7 @@ static void createSession(Basket *basket) {
         free(connInfo);
         freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
 
-        if (negotiated[0] != '\0') {
-            LOG("ERROR", "ALPN negotiation failed: server selected \"%s\" instead of \"h2\"", negotiated);
-        } else {
-            LOG("ERROR", "ALPN negotiation failed: server did not select any protocol (expected \"h2\")");
-        }
+        LOG("ERROR", "ALPN negotiation failed: server selected \"%s\" (expected \"h2\" or \"http/1.1\")", negotiated);
         basket -> error = ERR_SESSION_SSL_ALPN_HTTP2_NOT_SELECTED;
         return;
     }
@@ -537,7 +575,7 @@ static void createSession(Basket *basket) {
         return;
     }
 
-    // Select the socket I/O mode for the HTTP/2 transfer phase. Blocking is the
+    // Select the socket I/O mode for the transfer phase. Blocking is the
     // default (the reader thread gates each SSL_read behind select(), the write
     // path relies on fully-blocking SSL_write). When the request sets
     // "non-blocking": 1, the socket is left in non-blocking mode and the
@@ -554,40 +592,96 @@ static void createSession(Basket *basket) {
         }
     }
 
-    // establish HTTP/2 transport, send Settings frame
-    const int transport = establishTransport(basket, ssl);
-    if (transport < 0) {
-        SSL_set_app_data(ssl, NULL);
-        free(connInfo);
-        freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
+    if (protocol == HTTP_PROTOCOL_2) {
+        // establish HTTP/2 transport, send Settings frame
+        const int transport = establishTransport(basket, ssl);
+        if (transport < 0) {
+            SSL_set_app_data(ssl, NULL);
+            free(connInfo);
+            freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
+            return;
+        }
+
+        Session *session = initSession(basket, sockfd, sslCtx, ssl, connInfo, HTTP_PROTOCOL_2);
+        if (sessionInitFailed(session, basket)) {
+            SSL_set_app_data(ssl, NULL);
+            free(connInfo);
+            freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
+            return;
+        }
+
+        // Start the per-connection reader thread: it owns SSL_read and demultiplexes
+        // inbound frames by stream id for all concurrent requests on this session.
+        session -> readerRunning = 1;
+        if (pthread_create(&session -> reader, NULL, readerLoop, session) != 0) {
+            LOG("ERROR", "failed to start connection reader thread");
+            session -> readerRunning = 0;
+            basket -> error = ERR_RESPONSE_READING_CONNECTION_ERROR;
+            closeSession(session, basket -> error); // session owns ssl/ctx/sockfd/connInfo
+            return;
+        }
+        session -> readerStarted = 1;
+
+        // basket -> sessionId = strdup(session -> id);
+        basket -> session = session;
+    } else {
+        // HTTP/1.1 downgrade over the same TLS connection: no preface/SETTINGS,
+        // no HPACK context and no reader thread — each request runs a full
+        // serialized request/response exchange (see Http11RequestHandler).
+        Session *session = initSession(basket, sockfd, sslCtx, ssl, connInfo, HTTP_PROTOCOL_1_1);
+        if (sessionInitFailed(session, basket)) {
+            SSL_set_app_data(ssl, NULL);
+            free(connInfo);
+            freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
+            return;
+        }
+        basket -> session = session;
+    }
+}
+
+// Plain http:// session: TCP only (no TLS), always HTTP/1.1. Through a proxy
+// the connection stays in absolute-form mode (no CONNECT tunnel): every request
+// carries the full http://host:port/path target and the proxy credentials go
+// into a Proxy-Authorization header.
+static void createPlainHttp11Session(Basket *basket) {
+    int sockfd;
+    int plainProxy = 0;
+    if (strlen(basket -> proxy.host) > 0) {
+        sockfd = createSocket(basket, basket -> proxy.host, basket -> proxy.port, 1);
+        plainProxy = 1;
+    } else {
+        sockfd = createSocket(basket, basket -> request.urlComponents.host, basket -> request.urlComponents.port, 0);
+    }
+    if (sockfd < 0) {
         return;
     }
 
-    Session *session = initSession(basket, sockfd, sslCtx, ssl, connInfo);
-    if (session == NULL || basket -> error.code != NULL) {
-        SSL_set_app_data(ssl, NULL);
-        free(connInfo);
-        freeSession(ssl, sslCtx, sockfd, NULL, basket -> error);
-        return;
+    if (basket -> nonBlocking) {
+        if (setSocketNonBlocking(sockfd) < 0) {
+            LOG("ERROR", "failed to set socket non-blocking for plain http session");
+            closeSocket(sockfd);
+            basket -> error = ERR_SESSION_SOCKET_NONBLOCK_SETTING_FAILED;
+            return;
+        }
     }
 
-    // Start the per-connection reader thread: it owns SSL_read and demultiplexes
-    // inbound frames by stream id for all concurrent requests on this session.
-    session -> readerRunning = 1;
-    if (pthread_create(&session -> reader, NULL, readerLoop, session) != 0) {
-        LOG("ERROR", "failed to start connection reader thread");
-        session -> readerRunning = 0;
-        basket -> error = ERR_RESPONSE_READING_CONNECTION_ERROR;
-        closeSession(session, basket -> error); // session owns ssl/ctx/sockfd/connInfo
+    if (plainProxy) {
+        // no CONNECT exchange happened, but basketToString requires a non-empty
+        // proxy.response whenever a proxy is configured
+        strncpy(basket -> proxy.response, "HTTP/1.1 absolute-form (no CONNECT)", sizeof(basket -> proxy.response) - 1);
+        basket -> proxy.response[sizeof(basket -> proxy.response) - 1] = '\0';
+    }
+
+    Session *session = initSession(basket, sockfd, NULL, NULL, NULL, HTTP_PROTOCOL_1_1);
+    if (sessionInitFailed(session, basket)) {
+        freeSession(NULL, NULL, sockfd, NULL, basket -> error);
         return;
     }
-    session -> readerStarted = 1;
-
-    // basket -> sessionId = strdup(session -> id);
+    session -> plainProxy = plainProxy;
     basket -> session = session;
 }
 
-static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * ssl, TLSConnInfo *connInfo) {
+static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * ssl, TLSConnInfo *connInfo, HttpProtocol protocol) {
     Session *session = malloc(sizeof(Session));
     if (session == NULL) {
         LOG("ERROR", "failed to allocate memory for a new session");
@@ -628,7 +722,10 @@ static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * 
     strncpy(session -> proxy.response, basket -> proxy.response, sizeof(session -> proxy.response) - 1);
     session -> proxy.response[sizeof(session -> proxy.response) - 1] = '\0';
 
-    session -> hpackCtx = initHpackContext(basket);
+    session -> protocol = protocol;
+    session -> plainProxy = 0;
+    // HPACK is HTTP/2-only; HTTP/1.1 sessions carry plain text headers.
+    session -> hpackCtx = (protocol == HTTP_PROTOCOL_2) ? initHpackContext(basket) : NULL;
     session -> connInfo = connInfo; // ownership transferred from createSession
 
     atomic_init(&session -> streamId, 1);

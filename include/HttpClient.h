@@ -1,14 +1,14 @@
 //
-//  Http2Client.h
-//  HTTP2
+//  HttpClient.h
+//  HTTP
 //  
 //  Created by intuition on 2024/7/28.
 //  Copyright © 2024. All rights reserved.
 //  
     
 
-#ifndef Http2Client_h
-#define Http2Client_h
+#ifndef HttpClient_h
+#define HttpClient_h
 
 #include "Basket.h"
 #include "Version.h"
@@ -29,7 +29,7 @@ enum State {
 typedef struct {
     int initialSessionRecvWindow;
     enum State state;
-} Http2Client;
+} HttpClient;
 
 typedef struct {
     int statusCode;
@@ -37,7 +37,7 @@ typedef struct {
     char *errorMsg;
 } SessionResponse;
 
-Http2Client* newHttp2Client(void);
+HttpClient* newHttpClient(void);
 
 void initialiseEnv(void);
 void cleanupEnv(void);
@@ -62,14 +62,10 @@ char* pollRequest(long requestId, int *outStatus, int *outLen);
 // Reap all in-flight async requests (call at shutdown).
 void cleanupAsyncRequests(void);
 
-// Prepare + send a request into a registered stream without waiting for the
-// response. On success returns 0 and sets *outStream; the caller owns both the
-// basket and the stream (used by the async request registry). On failure
-// returns -1 and basket->error is set.
-int http2StartRequest(Basket *basket, Stream **outStream);
+void executeRequest(Basket *basket, Stream **outStream, int waitForResponse);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* Http2Client_h */
+#endif /* HttpClient_h */

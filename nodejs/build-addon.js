@@ -6,9 +6,9 @@
 // Why a script instead of an inline npm command:
 //   1. Clearing inherited compiler flags (CFLAGS/... ) needs POSIX-shell syntax
 //      that does not work in Windows cmd/PowerShell.
-//   2. On Windows the C library (libhttp2client.dll) is built with MinGW, but
+//   2. On Windows the C library (libhttpclient.dll) is built with MinGW, but
 //      the Node.js addon is built with MSVC (node-gyp's default on win32).
-//      After the build we copy libhttp2client.dll next to the addon so it can
+//      After the build we copy libhttpclient.dll next to the addon so it can
 //      be found at runtime (Windows has no rpath).
 
 const { spawnSync, execFileSync } = require('child_process')
@@ -53,16 +53,16 @@ function findLibExe() {
 // Clear inherited compiler flags so node-gyp uses its own defaults.
 const env = { ...process.env, CFLAGS: '', CXXFLAGS: '', CPPFLAGS: '', LDFLAGS: '' }
 
-// On Windows, MSVC needs an import library (http2client.lib) to link against
-// the MinGW-built libhttp2client.dll. Generate it automatically if missing.
+// On Windows, MSVC needs an import library (httpclient.lib) to link against
+// the MinGW-built libhttpclient.dll. Generate it automatically if missing.
 if (process.platform === 'win32') {
   const libDir = path.join(__dirname, '..', 'lib', 'shared')
-  const dll = path.join(libDir, 'libhttp2client.dll')
-  const lib = path.join(libDir, 'http2client.lib')
+  const dll = path.join(libDir, 'libhttpclient.dll')
+  const lib = path.join(libDir, 'httpclient.lib')
 
   if (!fs.existsSync(dll)) {
     console.error('build-addon: expected ' + dll + ' but it does not exist; ' +
-      'build the C library first (cmake --build) so libhttp2client.dll is produced.')
+      'build the C library first (cmake --build) so libhttpclient.dll is produced.')
     process.exit(1)
   }
 
@@ -71,7 +71,7 @@ if (process.platform === 'win32') {
   // since the last addon build).
   {
     // Step 1: gendef (from MSYS2/MinGW) extracts exported symbols into a .def
-    const defFile = path.join(libDir, 'libhttp2client.def')
+    const defFile = path.join(libDir, 'libhttpclient.def')
     const gendef = spawnSync('gendef', [dll], { cwd: libDir, stdio: 'inherit', env })
     if (gendef.error || gendef.status !== 0) {
       console.error('build-addon: gendef failed. Make sure gendef is on PATH ' +
@@ -120,19 +120,19 @@ if (result.status !== 0) {
   process.exit(result.status === null ? 1 : result.status)
 }
 
-// Windows has no rpath, so the addon can only find libhttp2client.dll if it
+// Windows has no rpath, so the addon can only find libhttpclient.dll if it
 // sits next to it. Copy it (and MinGW runtime DLLs) after a successful build.
 if (process.platform === 'win32') {
   const libDir = path.join(__dirname, '..', 'lib', 'shared')
-  const dll = path.join(libDir, 'libhttp2client.dll')
+  const dll = path.join(libDir, 'libhttpclient.dll')
   const destDir = path.join(__dirname, 'build', 'Release')
   fs.mkdirSync(destDir, { recursive: true })
-  fs.copyFileSync(dll, path.join(destDir, 'libhttp2client.dll'))
+  fs.copyFileSync(dll, path.join(destDir, 'libhttpclient.dll'))
 
-  // zlib is statically linked into libhttp2client.dll (see CMakeLists.txt),
+  // zlib is statically linked into libhttpclient.dll (see CMakeLists.txt),
   // so no external zlib DLL is needed at runtime.
 
-  // libhttp2client.dll is built with MinGW and depends on MinGW runtime DLLs
+  // libhttpclient.dll is built with MinGW and depends on MinGW runtime DLLs
   // (libwinpthread-1.dll, libgcc_s_seh-1.dll, libstdc++-6.dll -- the latter two
   // because BoringSSL is C++). These MUST match the compiler that built the DLL:
   // a stale/older copy left next to the addon makes it fail to load at runtime
@@ -141,7 +141,7 @@ if (process.platform === 'win32') {
   // lacks).
   //
   // Authoritative source: the runtimes CMake already staged into lib/shared next
-  // to libhttp2client.dll (see src/CMakeLists.txt) -- guaranteed to match the GCC
+  // to libhttpclient.dll (see src/CMakeLists.txt) -- guaranteed to match the GCC
   // that built the DLL, regardless of this shell's PATH. This matters because the
   // addon is usually built from an MSVC/PowerShell environment whose PATH may
   // resolve `where cc` to a DIFFERENT (older) MinGW. We only fall back to probing

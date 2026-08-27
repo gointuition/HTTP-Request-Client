@@ -2,8 +2,8 @@
 // Created by Intuition on 26-4-7.
 //
 
-#ifndef RESPONSEHANDLER_H
-#define RESPONSEHANDLER_H
+#ifndef HTTP2RESPONSEHANDLER_H
+#define HTTP2RESPONSEHANDLER_H
 
 #include <stdint.h>
 
@@ -29,4 +29,4 @@ void finalizeStreamIntoBasket(Basket *basket, Stream *stream);
 // fields already transferred to a basket).
 void freeStreamBuffers(Stream *stream);
 
-#endif //RESPONSEHANDLER_H
+#endif //HTTP2RESPONSEHANDLER_H

@@ -6,7 +6,7 @@ class HttpClient {
     }
 
     /**
-     * Initialize the HTTP/2 client environment
+     * Initialize the HTTP client environment
      * @returns {HttpClient} this
      */
     init() {
@@ -18,7 +18,7 @@ class HttpClient {
     }
 
     /**
-     * Send an HTTP/2 request
+     * Send an HTTP request
      * @param {Object|string} config - Request configuration object or JSON string
      * @returns {Object} Parsed response object
      * @throws {Error} If request fails
@@ -38,9 +38,9 @@ class HttpClient {
     }
 
     /**
-     * Send an HTTP/2 request asynchronously. The blocking native call runs on a
+     * Send an HTTP request asynchronously. The blocking native call runs on a
      * libuv worker thread, so multiple pending requests execute concurrently
-     * (same-host requests are multiplexed over one HTTP/2 connection).
+     * (same-host requests are multiplexed over one HTTP connection).
      * @param {Object|string} config - Request configuration object or JSON string
      * @returns {Promise<string>} Resolves with the response JSON string
      */
@@ -57,7 +57,7 @@ class HttpClient {
     }
 
     /**
-     * Send an HTTP/2 request in non-blocking mode. The native call starts the
+     * Send an HTTP request in non-blocking mode. The native call starts the
      * request (send HEADERS/DATA) and returns immediately with a request id; the
      * response is then polled on a timer, so the event loop never blocks and
      * UV_THREADPOOL_SIZE is irrelevant. The request config must carry

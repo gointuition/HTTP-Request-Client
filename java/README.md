@@ -11,7 +11,7 @@ cd <project_root>
 cmake -B build && cmake --build build -j$(nproc)
 ```
 
-Output: `lib/shared/libhttp2client.dylib` (macOS) or `lib/shared/libhttp2client.so` (Linux)
+Output: `lib/shared/libhttpclient.dylib` (macOS) or `lib/shared/libhttpclient.so` (Linux)
 
 **Windows (MSYS2 MINGW64 shell):**
 
@@ -21,7 +21,7 @@ cmake -B build -G "MinGW Makefiles"
 cmake --build build -j4
 ```
 
-Output: `lib/shared/libhttp2client.dll`
+Output: `lib/shared/libhttpclient.dll`
 
 ### 2. Install JDK
 
@@ -62,19 +62,19 @@ mvn -version
 
 | Tool | Purpose |
 |------|---------|
-| [MSYS2](https://www.msys2.org/) MINGW64 | Builds the C library (`libhttp2client.dll`) and the JNI bridge |
+| [MSYS2](https://www.msys2.org/) MINGW64 | Builds the C library (`libhttpclient.dll`) and the JNI bridge |
 | MinGW-w64 toolchain | `pacman -S mingw-w64-x86_64-toolchain` |
 | NASM, Go | BoringSSL build dependencies |
 | CMake >= 3.29 | Drives the C library build |
 
-> **Note:** On Windows the JNI bridge (`libhttp2jni.dll`) supports two compilers:
+> **Note:** On Windows the JNI bridge (`libhttpjni.dll`) supports two compilers:
 >
 > | Compiler | Command | Requirements |
 > |----------|---------|-------------|
-> | MSVC `cl.exe` (default) | `mvn clean package` | Run from "x64 Native Tools Command Prompt for VS 2022"; requires `http2client.lib` in `lib/shared/` |
+> | MSVC `cl.exe` (default) | `mvn clean package` | Run from "x64 Native Tools Command Prompt for VS 2022"; requires `httpclient.lib` in `lib/shared/` |
 > | MinGW `gcc` | `mvn clean package -Djni.compiler=gcc` | `gcc` on PATH (add `C:\msys64\mingw64\bin`) |
 >
-> Using MinGW gcc links directly against `libhttp2client.dll.a`, no import library needed.
+> Using MinGW gcc links directly against `libhttpclient.dll.a`, no import library needed.
 
 ## One-shot build (compile + package + test)
 
@@ -91,7 +91,7 @@ bash build.sh
 cd <project_root>\java
 $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
 mvn clean package "-Djni.compiler=gcc"
-java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
+java --enable-native-access=ALL-UNNAMED -cp build/http-client-1.0.0.jar Test
 ```
 
 **Windows (MSYS2 MINGW64 shell):**
@@ -100,7 +100,7 @@ java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
 cd <project_root>/java
 export MSYS2_ARG_CONV_EXCL="*"
 mvn clean package -Djni.compiler=gcc
-java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
+java --enable-native-access=ALL-UNNAMED -cp build/http-client-1.0.0.jar Test
 ```
 
 > In MINGW64 shell, `export MSYS2_ARG_CONV_EXCL="*"` is required to prevent
@@ -108,7 +108,7 @@ java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
 
 `build.sh` only performs environment checks (C library, Java, Maven), invokes
 `mvn clean package`, then runs the test. All actual build steps live in `pom.xml`.
-The build produces the fat JAR: `build/http2-client-1.0.0.jar`
+The build produces the fat JAR: `build/http-client-1.0.0.jar`
 
 ## Using Maven directly
 
@@ -130,7 +130,7 @@ mvn exec:java -Dexec.mainClass=Example
 | Phase | Plugin | Purpose |
 |-------|--------|---------|
 | `compile` | `maven-compiler-plugin` | Compile `*.java` and generate the JNI header via `javac -h` into `build/generated-jni/` |
-| `process-classes` | `maven-antrun-plugin` | Copy the generated header to `Http2Client_jni.h`; compile the JNI bridge with `gcc` or MSVC `cl.exe` (via `-Djni.compiler`); copy native libs into `build/classes/native/` |
+| `process-classes` | `maven-antrun-plugin` | Copy the generated header to `HttpClient_jni.h`; compile the JNI bridge with `gcc` or MSVC `cl.exe` (via `-Djni.compiler`); copy native libs into `build/classes/native/` |
 | `package` | `maven-shade-plugin` | Build the fat JAR (classes + `org.json` dependency + `native/` libraries) |
 
 - `org.json` is resolved as a standard Maven dependency (no manual `lib/*.jar` needed).
@@ -144,8 +144,8 @@ mvn exec:java -Dexec.mainClass=Example
 
 ```bash
 cd java
-java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Test
-java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Example
+java --enable-native-access=ALL-UNNAMED -cp build/http-client-1.0.0.jar Test
+java --enable-native-access=ALL-UNNAMED -cp build/http-client-1.0.0.jar Example
 ```
 
 > **`--enable-native-access=ALL-UNNAMED` 版本说明：**
@@ -160,31 +160,31 @@ java --enable-native-access=ALL-UNNAMED -cp build/http2-client-1.0.0.jar Example
 
 ### Calling from Java code
 
-`Http2Client` lives in the unnamed module (no package). On the same classpath it can be used directly, without an `import`:
+`HttpClient` lives in the unnamed module (no package). On the same classpath it can be used directly, without an `import`:
 
 ```java
-Http2Client.init();
-String result = Http2Client.request(requestJsonString);
-Http2Client.cleanup();
+HttpClient.init();
+String result = HttpClient.request(requestJsonString);
+HttpClient.cleanup();
 ```
 
 ## Fat JAR layout
 
 ```
-http2-client-1.0.0.jar
-├── Http2Client.class
+http-client-1.0.0.jar
+├── HttpClient.class
 ├── Example.class
 ├── Test.class
 ├── org/json/*.class        # JSON dependency (inlined)
 └── native/
-    ├── libhttp2client.{dylib|so|dll}  # C core library
-    └── libhttp2jni.{dylib|so|dll}     # JNI bridge
+    ├── libhttpclient.{dylib|so|dll}  # C core library
+    └── libhttpjni.{dylib|so|dll}     # JNI bridge
 ```
 
-At runtime `Http2Client.java` automatically extracts the native libraries from
+At runtime `HttpClient.java` automatically extracts the native libraries from
 `/native/` inside the JAR to a temp directory and loads them via `System.load()`.
 
-> **Windows note:** `libhttp2jni.dll` depends on `libhttp2client.dll` and MinGW
+> **Windows note:** `libhttpjni.dll` depends on `libhttpclient.dll` and MinGW
 > runtime DLLs (`libwinpthread-1.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll`).
 > Ensure `C:\msys64\mingw64\bin` is on your system PATH, or copy those DLLs
 > next to the extracted files.
@@ -193,10 +193,10 @@ At runtime `Http2Client.java` automatically extracts the native libraries from
 
 Each [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releases) ships the binding as a **single, cross-platform fat JAR**:
 
-- `http2-client-java-<ver>.jar` — Java bytecode **plus** all three platforms'
+- `http-client-java-<ver>.jar` — Java bytecode **plus** all three platforms'
   native libraries laid out as `native/linux/`, `native/macos/`, `native/win/`
 
-At runtime `Http2Client.loadNativeLibrary()` selects the matching `native/<plat>/`
+At runtime `HttpClient.loadNativeLibrary()` selects the matching `native/<plat>/`
 sub-directory from `os.name`, so **one artifact runs unchanged on Linux, macOS, and
 Windows** — no classifier, no per-platform dependency.
 
@@ -205,9 +205,9 @@ Put the single JAR on the classpath:
 ```bash
 # JDK >= 16 needs --enable-native-access; JDK < 16 must omit it
 java --enable-native-access=ALL-UNNAMED \
-  -cp "http2-client-java-1.0.0.jar" Test
+  -cp "http-client-java-1.0.0.jar" Test
 java --enable-native-access=ALL-UNNAMED \
-  -cp "http2-client-java-1.0.0.jar" Example
+  -cp "http-client-java-1.0.0.jar" Example
 ```
 
 In Maven you declare just one dependency, regardless of deployment OS:
@@ -215,17 +215,17 @@ In Maven you declare just one dependency, regardless of deployment OS:
 ```xml
 <dependency>
   <groupId>com.example</groupId>
-  <artifactId>http2-client-java</artifactId>
+  <artifactId>http-client-java</artifactId>
   <version>1.0.0</version>
 </dependency>
 ```
 
-Embed it as a normal dependency (`Http2Client` lives in the unnamed module, call directly without import):
+Embed it as a normal dependency (`HttpClient` lives in the unnamed module, call directly without import):
 
 ```java
-Http2Client.init();
-String result = Http2Client.request(requestJsonString);
-Http2Client.cleanup();
+HttpClient.init();
+String result = HttpClient.request(requestJsonString);
+HttpClient.cleanup();
 ```
 
 > **Windows note:** the JNI bridge depends on MinGW runtime DLLs (`libwinpthread-1.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll`). Ensure `C:\msys64\mingw64\bin` is on `PATH`, or copy those DLLs next to the JAR.
@@ -234,9 +234,9 @@ Http2Client.cleanup();
 
 ```
 java/build/
-├── http2-client-1.0.0.jar          # Fat JAR (final artifact, shade-packaged)
-├── original-http2-client-1.0.0.jar # Original JAR before shading
-├── generated-jni/Http2Client.h     # JNI header generated by javac -h
+├── http-client-1.0.0.jar          # Fat JAR (final artifact, shade-packaged)
+├── original-http-client-1.0.0.jar # Original JAR before shading
+├── generated-jni/HttpClient.h     # JNI header generated by javac -h
 └── classes/                        # Compilation output
     ├── *.class
     └── native/                     # gcc output + copied C library
@@ -254,9 +254,9 @@ java/build/
 
 | File | Description |
 |------|-------------|
-| `Http2Client.java` | Core binding class; declares `native` methods and loads libraries via `System.load` (from JAR or filesystem) |
-| `Http2Client.c` | JNI C bridge; calls the C library's `initialiseEnv`/`handleRequest`/`cleanupEnv` |
-| `Http2Client_jni.h` | JNI header generated by `javac -h` |
+| `HttpClient.java` | Core binding class; declares `native` methods and loads libraries via `System.load` (from JAR or filesystem) |
+| `HttpClient.c` | JNI C bridge; calls the C library's `initialiseEnv`/`handleRequest`/`cleanupEnv` |
+| `HttpClient_jni.h` | JNI header generated by `javac -h` |
 | `Example.java` | Example (GET / POST / custom timeout) |
 | `Test.java` | Test |
 | `build.sh` | Build wrapper (checks env, runs `mvn clean package`, runs test) |

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HTTP/2 Client Example
+HTTP Client Example
 
 Mirrors nodejs/example.js - demonstrates GET, POST, and custom timeout requests.
 """
@@ -28,7 +28,7 @@ def read_json_without_comments(file_path):
 
 
 def main():
-    print("HTTP/2 Client Example\n")
+    print("HTTP Client Example\n")
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

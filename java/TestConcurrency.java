@@ -1,9 +1,9 @@
 /*
  * TestConcurrency.java
  *
- * HTTP/2 Client — Concurrency Test
+ * HTTP Client — Concurrency Test
  *
- * Tests HTTP/2 multiplexing: multiple concurrent requests sharing
+ * Tests HTTP multiplexing: multiple concurrent requests sharing
  * one connection via a thread-pool, each taking its own odd stream id (1, 3, 5, ...).
  */
 
@@ -49,7 +49,7 @@ public class TestConcurrency {
         r.index = index;
         long t0 = System.currentTimeMillis();
         try {
-            String res = Http2Client.request(requestJson);
+            String res = HttpClient.request(requestJson);
             r.ms = System.currentTimeMillis() - t0;
             JSONObject root = new JSONObject(res);
             JSONObject error = root.optJSONObject("error");
@@ -75,7 +75,7 @@ public class TestConcurrency {
     }
 
     public static void main(String[] args) {
-        System.out.println("=== HTTP/2 Client — Concurrency Test ===\n");
+        System.out.println("=== HTTP Client — Concurrency Test ===\n");
 
         int passed = 0;
         int failed = 0;
@@ -85,11 +85,11 @@ public class TestConcurrency {
                 .replace("/java", "").replace("\\java", "");
 
         // Init
-        System.out.println("[Init] Initializing HTTP/2 client...");
-        Http2Client.init();
+        System.out.println("[Init] Initializing HTTP client...");
+        HttpClient.init();
         System.out.println("[Init] Initialized\n");
 
-        // Concurrent requests (HTTP/2 multiplexing).
+        // Concurrent requests (HTTP multiplexing).
         System.out.println("[Test] Concurrent requests (multiplexed)...");
         try {
             final String requestJson = readJsonWithoutComments(projectRoot + "/bin/request_Concurrency.json");
@@ -154,7 +154,7 @@ public class TestConcurrency {
 
         // Cleanup
         System.out.println("\n[Cleanup] Cleaning up...");
-        Http2Client.cleanup();
+        HttpClient.cleanup();
         System.out.println("[Cleanup] Done");
 
         int total = passed + failed;

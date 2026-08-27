@@ -1,17 +1,17 @@
 {
   "targets": [
     {
-      "target_name": "http2addon",
+      "target_name": "httpaddon",
       # Disable node-gyp's Windows delay-load hook. The hook is only needed
       # when node.exe is renamed; we load a normally-named node.exe, so it is
       # unnecessary.
       "win_delay_load_hook": "false",
-      "sources": ["http2-addon.cc"],
+      "sources": ["http-addon.cc"],
       "library_dirs": [
         "<(module_root_dir)/../lib/shared"
       ],
       "libraries": [
-        "-lhttp2client"
+        "-lhttpclient"
       ],
       "cflags!": ["-fno-exceptions"],
       "cflags_cc!": ["-fno-exceptions"],
@@ -49,10 +49,10 @@
               "AdditionalOptions": ["/std:c++17"]
             }
           }
-          # C library (libhttp2client.dll) is built with MinGW; the addon itself
-          # is built with MSVC (node-gyp default on win32). -lhttp2client resolves
-          # to http2client.lib in library_dirs (../lib/shared). Windows has no
-          # rpath, so build-addon.js copies libhttp2client.dll next to the
+          # C library (libhttpclient.dll) is built with MinGW; the addon itself
+          # is built with MSVC (node-gyp default on win32). -lhttpclient resolves
+          # to httpclient.lib in library_dirs (../lib/shared). Windows has no
+          # rpath, so build-addon.js copies libhttpclient.dll next to the
           # compiled addon after the build.
           # The addon forward-declares the C API (no project headers included),
           # so no extra include_dirs are needed for MSVC.

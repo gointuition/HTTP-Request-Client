@@ -1,7 +1,7 @@
 """
-HTTP/2 Client - Python binding via cffi (ABI mode).
+HTTP Client - Python binding via cffi (ABI mode).
 
-Mirrors nodejs/index.js: wraps the native C library (libhttp2client.dylib)
+Mirrors nodejs/index.js: wraps the native C library (libhttpclient.dylib)
 and exposes init() / request() / cleanup().
 
 Uses cffi ABI mode (ffi.dlopen) - no C compiler required at runtime,
@@ -15,7 +15,7 @@ import platform
 from cffi import FFI
 
 
-# ── cffi definition: declare the C API from Http2Client.h ──────────────
+# ── cffi definition: declare the C API from HttpClient.h ──────────────
 ffi = FFI()
 ffi.cdef("""
     void initialiseEnv(void);
@@ -54,11 +54,11 @@ def _find_library():
 
     system = platform.system()
     if system == "Darwin":
-        lib_name = "libhttp2client.dylib"
+        lib_name = "libhttpclient.dylib"
     elif system == "Linux":
-        lib_name = "libhttp2client.so"
+        lib_name = "libhttpclient.so"
     else:
-        lib_name = "libhttp2client.dll"
+        lib_name = "libhttpclient.dll"
 
     # 1) project lib/shared
     candidate = os.path.join(lib_shared, lib_name)
@@ -83,7 +83,7 @@ def _find_library():
 
 class HttpClient:
     """
-    HTTP/2 client backed by the native C library.
+    HTTP client backed by the native C library.
 
     Mirrors the HttpClient class in nodejs/index.js.
     """
@@ -103,7 +103,7 @@ class HttpClient:
 
     def init(self):
         """
-        Initialize the HTTP/2 client environment.
+        Initialize the HTTP client environment.
         Returns self for chaining.
         """
         if not self._initialized:
@@ -114,7 +114,7 @@ class HttpClient:
 
     def request(self, config):
         """
-        Send an HTTP/2 request.
+        Send an HTTP request.
 
         :param config: Request configuration dict or JSON string.
         :return: Response JSON string from native library.

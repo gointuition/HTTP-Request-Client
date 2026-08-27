@@ -33,19 +33,19 @@ function isCommentLine(line) {
         line.startsWith(';');
 }
 
-console.log('=== HTTP/2 Client — Concurrency Test ===\n');
+console.log('=== HTTP Client — Concurrency Test ===\n');
 
 let passed = 0;
 let failed = 0;
 const CONCURRENCY = 8;
 
 // Initialize first
-console.log('[Init] Initializing HTTP/2 client...');
+console.log('[Init] Initializing HTTP client...');
 httpClient.init();
 console.log('[Init] ✓ Initialized\n');
 
 async function runTests() {
-    // Concurrent requests via Promise.all (HTTP/2 multiplexing).
+    // Concurrent requests via Promise.all (HTTP multiplexing).
     // The async path runs each blocking native call on a libuv worker thread, so
     // these fire in parallel; same-host requests share ONE multiplexed connection
     // and each takes its own stream (odd ids 1,3,5,...).

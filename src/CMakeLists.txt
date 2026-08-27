@@ -20,13 +20,13 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${LIB_PATH_SHARED})
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${LIB_PATH_SHARED})
 
 # generate lib
-add_library(${HTTP2_CLIENT} SHARED ${SRC})
+add_library(${HTTP_CLIENT} SHARED ${SRC})
 
 # set output name, soname versioning, and ensure it goes to the correct directory
-set_target_properties(${HTTP2_CLIENT} PROPERTIES
-        OUTPUT_NAME ${HTTP2_CLIENT}
-        VERSION ${HTTP2CLIENT_VERSION_MAJOR}.${HTTP2CLIENT_VERSION_MINOR}.${HTTP2CLIENT_VERSION_PATCH}
-        SOVERSION ${HTTP2CLIENT_SOVERSION}
+set_target_properties(${HTTP_CLIENT} PROPERTIES
+        OUTPUT_NAME ${HTTP_CLIENT}
+        VERSION ${HTTPCLIENT_VERSION_MAJOR}.${HTTPCLIENT_VERSION_MINOR}.${HTTPCLIENT_VERSION_PATCH}
+        SOVERSION ${HTTPCLIENT_SOVERSION}
         LIBRARY_OUTPUT_DIRECTORY ${LIB_PATH_SHARED}
         ARCHIVE_OUTPUT_DIRECTORY ${LIB_PATH_SHARED}
         LIBRARY_OUTPUT_DIRECTORY_DEBUG ${LIB_PATH_SHARED}
@@ -37,13 +37,13 @@ set_target_properties(${HTTP2_CLIENT} PROPERTIES
 # ── Size optimization: split each function/data into its own section so the
 #    linker can discard unused code (BoringSSL/Brotli/Zstd pull in a lot we
 #    never call). Paired with -Wl,--gc-sections / -Wl,-dead_strip below.
-target_compile_options(${HTTP2_CLIENT} PRIVATE
+target_compile_options(${HTTP_CLIENT} PRIVATE
         $<$<CONFIG:Release>:-ffunction-sections -fdata-sections>
         $<$<CONFIG:RelWithDebInfo>:-ffunction-sections -fdata-sections>
 )
 
 # include third parties headers
-target_include_directories(${HTTP2_CLIENT} PRIVATE
+target_include_directories(${HTTP_CLIENT} PRIVATE
         ${BORINGSSL_DIR}/include
         ${BROTLI_DIR}/c/include
         ${ZSTD_DIR}/lib
@@ -60,7 +60,7 @@ else ()
     set(ZLIB_LINK_TARGET ZLIB::ZLIB)
 endif ()
 
-target_link_libraries(${HTTP2_CLIENT} PRIVATE
+target_link_libraries(${HTTP_CLIENT} PRIVATE
         crypto
         ssl
         brotlicommon
@@ -73,18 +73,18 @@ target_link_libraries(${HTTP2_CLIENT} PRIVATE
 )
 
 # threading + platform-specific system libraries
-target_link_libraries(${HTTP2_CLIENT} PRIVATE Threads::Threads)
+target_link_libraries(${HTTP_CLIENT} PRIVATE Threads::Threads)
 
 # ── Dead-code stripping: drop unused sections pulled in by the static
 #    third-party libs (BoringSSL crypto, Brotli, Zstd, ...).
 #    macOS/ld uses -dead_strip; GNU ld/gold/lld use --gc-sections.
 if (APPLE)
-    target_link_options(${HTTP2_CLIENT} PRIVATE
+    target_link_options(${HTTP_CLIENT} PRIVATE
             $<$<CONFIG:Release>:-Wl,-dead_strip>
             $<$<CONFIG:RelWithDebInfo>:-Wl,-dead_strip>
     )
 elseif (NOT WIN32)
-    target_link_options(${HTTP2_CLIENT} PRIVATE
+    target_link_options(${HTTP_CLIENT} PRIVATE
             $<$<CONFIG:Release>:-Wl,--gc-sections>
             $<$<CONFIG:RelWithDebInfo>:-Wl,--gc-sections>
     )
@@ -95,18 +95,18 @@ endif ()
 #    macOS uses -x (or `strip -x`); GNU uses -s. Skipped on Windows (MinGW
 #    keeps its runtime DLLs; the addon loads them separately).
 if (APPLE)
-    target_link_options(${HTTP2_CLIENT} PRIVATE $<$<CONFIG:Release>:-Wl,-x>)
+    target_link_options(${HTTP_CLIENT} PRIVATE $<$<CONFIG:Release>:-Wl,-x>)
 elseif (NOT WIN32)
-    target_link_options(${HTTP2_CLIENT} PRIVATE $<$<CONFIG:Release>:-Wl,-s>)
+    target_link_options(${HTTP_CLIENT} PRIVATE $<$<CONFIG:Release>:-Wl,-s>)
 endif ()
 
 # Windows: link the Winsock2 socket library
 if (WIN32)
-    target_link_libraries(${HTTP2_CLIENT} PRIVATE ws2_32)
+    target_link_libraries(${HTTP_CLIENT} PRIVATE ws2_32)
 endif ()
 
 # Windows/MinGW: stage the MinGW runtime DLLs this GCC links against right next to
-# libhttp2client.dll. Downstream consumers (the Node addon, the Java binding, the
+# libhttpclient.dll. Downstream consumers (the Node addon, the Java binding, the
 # test executables) then copy them from lib/shared -- so the runtimes are ALWAYS
 # the exact versions that built the DLL, regardless of what a later shell's PATH
 # happens to resolve. Locating them here (from CMAKE_C_COMPILER's own bin dir) is
@@ -116,10 +116,10 @@ if (WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     get_filename_component(MINGW_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
     foreach (rt libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
         if (EXISTS "${MINGW_BIN_DIR}/${rt}")
-            add_custom_command(TARGET ${HTTP2_CLIENT} POST_BUILD
+            add_custom_command(TARGET ${HTTP_CLIENT} POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                             "${MINGW_BIN_DIR}/${rt}" "${LIB_PATH_SHARED}/${rt}"
-                    COMMENT "Staging MinGW runtime ${rt} next to libhttp2client.dll")
+                    COMMENT "Staging MinGW runtime ${rt} next to libhttpclient.dll")
         endif ()
     endforeach ()
 endif ()

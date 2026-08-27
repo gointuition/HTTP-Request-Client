@@ -9,9 +9,9 @@
 #include <time.h>
 
 #include "Basket.h"
-#include "Http2Client.h"
+#include "HttpClient.h"
 #include "Session.h"
-#include "ResponseHandler.h"
+#include "Http2ResponseHandler.h"
 #include "Error.h"
 #include "Log.h"
 
@@ -88,8 +88,9 @@ long handleRequestAsync(const char *requestJSONString) {
 
     Stream *stream = NULL;
     if (basket -> error.code == NULL) {
-        if (http2StartRequest(basket, &stream) != 0) {
-            // startRequest left basket->error set; the request stays registered
+        executeRequest(basket, &stream, 0);
+        if (basket -> error.code != NULL) {
+            // executeRequest left basket->error set; the request stays registered
             // so pollRequest() surfaces it as a completed-with-error entry.
             stream = NULL;
         }

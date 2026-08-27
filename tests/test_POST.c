@@ -8,7 +8,7 @@
 #include "jansson.h"
 
 #include "File.h"
-#include "Http2Client.h"
+#include "HttpClient.h"
 #include "Log.h"
 
 static int validateBasket(const char *basketStr) {

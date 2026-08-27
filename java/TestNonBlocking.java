@@ -1,7 +1,7 @@
 /*
  * TestNonBlocking.java
  *
- * HTTP/2 Client — Non-Blocking Concurrency Test
+ * HTTP Client — Non-Blocking Concurrency Test
  *
  * Unlike TestConcurrency.java (which runs the blocking request() on a
  * thread-pool), this uses the async surface (startRequest + pollRequest):
@@ -36,7 +36,7 @@ public class TestNonBlocking {
     }
 
     public static void main(String[] args) {
-        System.out.println("=== HTTP/2 Client — Non-Blocking Concurrency Test ===\n");
+        System.out.println("=== HTTP Client — Non-Blocking Concurrency Test ===\n");
 
         int passed = 0;
         int failed = 0;
@@ -45,8 +45,8 @@ public class TestNonBlocking {
         String projectRoot = System.getProperty("user.dir")
                 .replace("/java", "").replace("\\java", "");
 
-        System.out.println("[Init] Initializing HTTP/2 client...");
-        Http2Client.init();
+        System.out.println("[Init] Initializing HTTP client...");
+        HttpClient.init();
         System.out.println("[Init] Initialized\n");
 
         System.out.println("[Test] non-blocking concurrent requests (async surface)...");
@@ -71,7 +71,7 @@ public class TestNonBlocking {
             Map<Long, Integer> pending = new HashMap<>();
             int[] started = new int[concurrency];
             for (int i = 0; i < concurrency; i++) {
-                long id = Http2Client.startRequest(requestJsonNb);
+                long id = HttpClient.startRequest(requestJsonNb);
                 if (id == 0) {
                     failed++;
                     started[i] = -1;
@@ -86,7 +86,7 @@ public class TestNonBlocking {
             String[] results = new String[concurrency];
             while (!pending.isEmpty()) {
                 for (Long rid : new ArrayList<>(pending.keySet())) {
-                    Http2Client.PollResult r = Http2Client.pollRequest(rid);
+                    HttpClient.PollResult r = HttpClient.pollRequest(rid);
                     if (r.status == 0) {
                         continue; // still in flight
                     }
@@ -143,7 +143,7 @@ public class TestNonBlocking {
         }
 
         System.out.println("\n[Cleanup] Cleaning up...");
-        Http2Client.cleanup();
+        HttpClient.cleanup();
         System.out.println("[Cleanup] Done");
 
         int total = passed + failed;

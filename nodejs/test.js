@@ -29,13 +29,13 @@ function isCommentLine(line) {
         line.startsWith(';');
 }
 
-console.log('=== HTTP/2 Client Test ===\n');
+console.log('=== HTTP Client Test ===\n');
 
 let passed = 0;
 let failed = 0;
 
 // Initialize first
-console.log('[Init] Initializing HTTP/2 client...');
+console.log('[Init] Initializing HTTP client...');
 httpClient.init();
 console.log('[Init] ✓ Initialized\n');
 

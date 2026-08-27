@@ -16,6 +16,7 @@
 static void initBasket(Basket * basket);
 static const char *headerValueToString(const json_t *jsonValue, char *buffer, size_t bufferSize);
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders);
+static void buildHttp11Headers(Basket *basket, json_t *jsonHeaders);
 static void reorderHeadersByOrderKey(Basket *basket);
 static size_t processCookies(RequestHeader *headers, size_t idx, const char *cookie, const int calculateCookieCount, int headerValueMaxLength);
 static void parseLog(const json_t *jsonRequest);
@@ -59,6 +60,10 @@ Basket* buildBasket(const char *requestString) {
         parseMethod(basket, jsonRequest);
     }
 
+    if (basket -> error.code == NULL) {
+        parseSession(basket, jsonRequest);
+    }
+
     // parse headers
     if (basket -> error.code == NULL) {
         parseHeaders(basket, jsonRequest);
@@ -73,10 +78,6 @@ Basket* buildBasket(const char *requestString) {
 
     if (basket -> error.code == NULL) {
         parseProxy(basket, jsonRequest);
-    }
-
-    if (basket -> error.code == NULL) {
-        parseSession(basket, jsonRequest);
     }
 
     if (jsonRequest != NULL) {
@@ -174,8 +175,15 @@ static void parseHeaders(Basket *basket, json_t *jsonRequest) {
     }
 
     if (basket -> error.code == NULL) {
-        // compose headers
-        buildHttp2Headers(basket, jsonHeaders);
+        if (basket -> forceHttp11) {
+            buildHttp11Headers(basket, jsonHeaders);
+        } else {
+            buildHttp2Headers(basket, jsonHeaders);
+        }
+    }
+
+    if (basket -> error.code == NULL) {
+        reorderHeadersByOrderKey(basket);
     }
 }
 
@@ -270,6 +278,25 @@ static void parseSession(Basket *basket, const json_t *jsonRequest) {
         if (expirationInMilliseconds != NULL) {
             basket -> sessionExpirationInMilliseconds = json_integer_value(expirationInMilliseconds);
         }
+        const json_t *protocol = json_object_get(jsonSession, "protocol");
+        if (protocol != NULL) {
+            const char *protocolStr = json_string_value(protocol);
+            if (protocolStr == NULL) {
+                LOG("ERROR", "session.protocol must be a string");
+                basket -> error = ERR_REQUEST_UNSUPPORTED_PROTOCOL;
+            } else if (strcasecmp(protocolStr, "http/1.1") == 0
+                       || strcasecmp(protocolStr, "http1.1") == 0
+                       || strcasecmp(protocolStr, "http11") == 0) {
+                basket -> forceHttp11 = 1;
+            } else if (strcasecmp(protocolStr, "h2") == 0
+                       || strcasecmp(protocolStr, "http2") == 0
+                       || strcasecmp(protocolStr, "http/2") == 0) {
+                basket -> forceHttp11 = 0;
+            } else {
+                LOG("ERROR", "unsupported session protocol: %s", protocolStr);
+                basket -> error = ERR_REQUEST_UNSUPPORTED_PROTOCOL;
+            }
+        }
     }
 }
 
@@ -300,6 +327,7 @@ void initBasket(Basket * basket) {
 
     basket -> decompress = 1;
     basket -> nonBlocking = 1;
+    basket -> forceHttp11 = 0;
 }
 
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
@@ -397,10 +425,67 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     }
 
     basket -> request.numHeaders = idx;
+}
 
-    if (basket -> error.code == NULL) {
-        reorderHeadersByOrderKey(basket);
+static void buildHttp11Headers(Basket *basket, json_t *jsonHeaders) {
+    size_t idx = 0;
+
+    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const int headerValueMaxLength = (fp != NULL) ? fp -> headerValueMaxLength : 4096;
+
+    size_t cookieCount = 0;
+    const json_t *jsonCookie = json_object_get(jsonHeaders, "cookie");
+    if (jsonCookie != NULL) {
+        cookieCount = processCookies(NULL, 0, json_string_value(jsonCookie), 1, headerValueMaxLength);
     }
+
+    // +1: content-length ?
+    basket -> request.headers = (RequestHeader *) malloc(sizeof(RequestHeader) * (json_object_size(jsonHeaders) + 1 + cookieCount));
+
+    const json_t *pseudoAuthority = json_object_get(jsonHeaders, ":authority");
+
+    basket -> request.containsContentLength = 0;
+
+    void *iter = json_object_iter(jsonHeaders);
+    while (iter) {
+        const char *key = json_object_iter_key(iter);
+        if (strcasecmp("content-length", key) == 0) {
+            basket -> request.containsContentLength = 1;
+        }
+
+        const json_t *jsonValue = json_object_iter_value(iter);
+        char scalarBuffer[64] = {0};
+        const char *value = headerValueToString(jsonValue, scalarBuffer, sizeof(scalarBuffer));
+        if (value == NULL) {
+            LOG("WARN", "skipping header %s: unsupported value type", key);
+        }
+
+        // :method / :scheme / :path are carried by the request line
+        if (strcasecmp(":method", key) == 0
+            || strcasecmp(":scheme", key) == 0
+            || strcasecmp(":path", key) == 0) {
+            iter = json_object_iter_next(jsonHeaders, iter);
+            continue;
+        }
+
+        if (value != NULL) {
+            if (strcasecmp(":authority", key) == 0) {
+                // emitted as "Host:" by the wire builder
+                basket -> request.headers[idx++] = (RequestHeader) { strdup(key), strdup(value), 1, 1, 1 };
+            } else if (strcasecmp("host", key) == 0 && pseudoAuthority != NULL) {
+                // ":authority" already supplies the Host header
+            } else if (strcasecmp("cookie", key) == 0) {
+                // one header max size not more than 4KB, total headers 8KB
+                idx = processCookies(basket -> request.headers, idx, value, 0, headerValueMaxLength);
+            } else {
+                basket -> request.headers[idx++] = (RequestHeader) { strdup(key), strdup(value), 0, 1, 1 };
+            }
+        }
+
+        iter = json_object_iter_next(jsonHeaders, iter);
+    }
+
+    basket -> request.numHeaders = idx;
 }
 
 // Case-insensitive comparison of two header names.

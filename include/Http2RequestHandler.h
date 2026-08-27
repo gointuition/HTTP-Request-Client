@@ -2,8 +2,8 @@
 // Created by Intuition on 26-4-7.
 //
 
-#ifndef REQUESTHANDLER_H
-#define REQUESTHANDLER_H
+#ifndef HTTP2REQUESTHANDLER_H
+#define HTTP2REQUESTHANDLER_H
 
 #include "Basket.h"
 
@@ -20,4 +20,4 @@ void sendDataFrame(Basket *basket);
 // to timeoutInMillis. Returns 1 on success, -1 on failure.
 int sslWriteAllEx(SSL *ssl, int nonBlocking, int timeoutInMillis, const unsigned char *buf, size_t len);
 
-#endif //REQUESTHANDLER_H
+#endif //HTTP2REQUESTHANDLER_H

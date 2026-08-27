@@ -51,6 +51,11 @@ typedef enum {
     SESSION_UNAVAILABLE
 } SessionStatus;
 
+typedef enum {
+    HTTP_PROTOCOL_2 = 0,
+    HTTP_PROTOCOL_1_1 = 1
+} HttpProtocol;
+
 typedef struct {
     const char  *name;
     const char  *value;
@@ -142,7 +147,9 @@ typedef struct {
     SSL_CTX             *sslCtx;
     SSL                 *ssl;
     HpackContext        *hpackCtx;
-    TLSConnInfo         *connInfo; // heap-allocated, lives for session lifetime (used by newSessionCallback)
+    HttpProtocol        protocol;
+    int                 plainProxy;
+    TLSConnInfo         *connInfo;
     // ── HTTP/2 multiplexing / concurrency ──
     pthread_mutex_t     writeMutex;     // serialize SSL_write across concurrent streams
     pthread_mutex_t     streamsMutex;   // guard the stream registry below
@@ -161,6 +168,7 @@ typedef struct {
     // const char  *sessionId;
     int         decompress;
     int         nonBlocking;    // 1 = use non-blocking socket I/O for this request
+    int         forceHttp11;    // 1 = request forced HTTP/1.1 ("session": {"protocol": "http/1.1"})
     int         connectTimeoutInMilliseconds;
     int         responseReadingTimeoutInMilliseconds;
     int         sessionExpirationInMilliseconds;

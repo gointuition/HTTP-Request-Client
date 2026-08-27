@@ -1,7 +1,7 @@
 /*
  * Example.java
  *
- * HTTP/2 Client Example
+ * HTTP Client Example
  *
  * demonstrates GET, POST, and custom timeout requests.
  */
@@ -44,7 +44,7 @@ public class Example {
     }
 
     public static void main(String[] args) {
-        System.out.println("HTTP/2 Client Example\n");
+        System.out.println("HTTP Client Example\n");
 
         String projectRoot = System.getProperty("user.dir")
                 .replace("/java", "").replace("\\java", "");
@@ -53,7 +53,7 @@ public class Example {
         System.out.println("Example 1: GET request");
         try {
             String jsonStr = readJsonWithoutComments(projectRoot + "/bin/request_GET.json");
-            String result = Http2Client.request(jsonStr);
+            String result = HttpClient.request(jsonStr);
             JSONObject resultObj = new JSONObject(result);
             System.out.println(resultObj.toString(2));
         } catch (Exception e) {
@@ -73,7 +73,7 @@ public class Example {
             int byteLen = payloadStr.getBytes("UTF-8").length;
             requestJson.getJSONObject("headers").put("content-length", String.valueOf(byteLen));
 
-            String result = Http2Client.request(requestJson.toString());
+            String result = HttpClient.request(requestJson.toString());
             JSONObject resultObj = new JSONObject(result);
             System.out.println(resultObj.toString(2));
         } catch (Exception e) {
@@ -89,7 +89,7 @@ public class Example {
             requestJson.put("connectTimeoutInMilliseconds", 5000);
             requestJson.put("responseReadingTimeoutInMilliseconds", 5000);
 
-            String result = Http2Client.request(requestJson.toString());
+            String result = HttpClient.request(requestJson.toString());
             JSONObject resultObj = new JSONObject(result);
             System.out.println(resultObj.toString(2));
         } catch (Exception e) {
@@ -97,7 +97,7 @@ public class Example {
         }
 
         // Cleanup
-        Http2Client.cleanup();
+        HttpClient.cleanup();
         System.out.println("\nDone!");
     }
 }

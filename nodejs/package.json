@@ -1,7 +1,7 @@
 {
   "name": "@gointuition/http-client",
   "version": "1.0.7",
-  "description": "High-performance HTTP/2 client with native C implementation",
+  "description": "High-performance HTTP client with native C implementation",
   "main": "index.js",
   "types": "index.d.ts",
   "scripts": {
@@ -11,7 +11,7 @@
     "benchmark": "node benchmark.js"
   },
   "keywords": [
-    "http2",
+    "http",
     "client",
     "native",
     "performance"

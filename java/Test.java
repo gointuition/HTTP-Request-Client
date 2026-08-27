@@ -1,7 +1,7 @@
 /*
  * Test.java
  *
- * HTTP/2 Client Test
+ * HTTP Client Test
  *
  * Basic test for init, single request, and cleanup.
  */
@@ -29,7 +29,7 @@ public class Test {
     }
 
     public static void main(String[] args) {
-        System.out.println("=== HTTP/2 Client Test ===\n");
+        System.out.println("=== HTTP Client Test ===\n");
 
         int passed = 0;
         int failed = 0;
@@ -38,8 +38,8 @@ public class Test {
                 .replace("/java", "").replace("\\java", "");
 
         // Init
-        System.out.println("[Init] Initializing HTTP/2 client...");
-        Http2Client.init();
+        System.out.println("[Init] Initializing HTTP client...");
+        HttpClient.init();
         System.out.println("[Init] Initialized\n");
 
         // Test 1: Single request
@@ -47,7 +47,7 @@ public class Test {
         try {
             String jsonStr = readJsonWithoutComments(projectRoot + "/bin/request_GET.json");
             long start = System.currentTimeMillis();
-            String result = Http2Client.request(jsonStr);
+            String result = HttpClient.request(jsonStr);
             long elapsed = System.currentTimeMillis() - start;
 
             JSONObject resultObj = new JSONObject(result);
@@ -82,7 +82,7 @@ public class Test {
 
         // Cleanup
         System.out.println("\n[Cleanup] Cleaning up...");
-        Http2Client.cleanup();
+        HttpClient.cleanup();
         System.out.println("[Cleanup] Done");
 
         int total = passed + failed;

@@ -3,7 +3,7 @@
 
 set -e
 
-echo "=== Building HTTP/2 Python Binding ==="
+echo "=== Building HTTP Python Binding ==="
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -13,11 +13,11 @@ echo "Project root: $PROJECT_ROOT"
 echo "Python binding directory: $SCRIPT_DIR"
 
 # Check if shared library exists
-LIB_NAME="libhttp2client.dylib"
+LIB_NAME="libhttpclient.dylib"
 if [ "$(uname)" = "Linux" ]; then
-    LIB_NAME="libhttp2client.so"
+    LIB_NAME="libhttpclient.so"
 elif [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
-    LIB_NAME="libhttp2client.dll"
+    LIB_NAME="libhttpclient.dll"
 fi
 
 if [ ! -f "$PROJECT_ROOT/lib/shared/$LIB_NAME" ]; then

@@ -184,7 +184,7 @@ jobs:
           path: python_test.log
           if-no-files-found: ignore
 
-      # Java binding (JNI bridge; builds a fat JAR linking http2client + JNI
+      # Java binding (JNI bridge; builds a fat JAR linking httpclient + JNI
       # bridge, then runs Test.java from the JAR).  See java/build.sh.
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -259,7 +259,7 @@ jobs:
       - name: Upload library artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lib-http2client-ubuntu-latest
+          name: lib-httpclient-ubuntu-latest
           path: |
             lib/shared/*
             include/*.h
@@ -296,7 +296,7 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install --quiet build cffi wheel setuptools
           mkdir -p lib
-          cp "$GITHUB_WORKSPACE/lib/shared/libhttp2client.so" "lib/libhttp2client.so"
+          cp "$GITHUB_WORKSPACE/lib/shared/libhttpclient.so" "lib/libhttpclient.so"
           python3 setup.py bdist_wheel --plat-name="manylinux_2_28_x86_64" --dist-dir dist
           ls -1 dist
 
@@ -424,7 +424,7 @@ jobs:
           path: python_test.log
           if-no-files-found: ignore
 
-      # Java binding (JNI bridge; builds a fat JAR linking http2client + JNI
+      # Java binding (JNI bridge; builds a fat JAR linking httpclient + JNI
       # bridge, then runs Test.java from the JAR).  See java/build.sh.
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -487,7 +487,7 @@ jobs:
       - name: Upload library artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lib-http2client-macos-latest
+          name: lib-httpclient-macos-latest
           path: |
             lib/shared/*
             include/*.h
@@ -520,7 +520,7 @@ jobs:
           cd "${{ github.workspace }}/python"
           python3 -m pip install --quiet build cffi wheel
           mkdir -p lib
-          cp "${{ github.workspace }}/lib/shared/libhttp2client.dylib" "lib/libhttp2client.dylib"
+          cp "${{ github.workspace }}/lib/shared/libhttpclient.dylib" "lib/libhttpclient.dylib"
           python3 setup.py bdist_wheel --plat-name="macosx_11_0_x86_64" --dist-dir dist
           ls -1 dist
 
@@ -655,8 +655,8 @@ jobs:
       # Language bindings (test.py / test.js / Test.java) — Windows
       # ================================================================
 
-      # Python: cffi already handles Windows (http2_client.py detects the
-      # platform and uses libhttp2client.dll).  build.sh installs cffi via
+      # Python: cffi already handles Windows (http_client.py detects the
+      # platform and uses libhttpclient.dll).  build.sh installs cffi via
       # MSYS2 pip (mingw-w64-x86_64-python-pip package).
       - name: Python — run test.py (Windows)
         id: py_test_win
@@ -707,13 +707,13 @@ jobs:
           # avoiding the MSYS2 bin/mvn classpath bug. The Windows Maven profile
           # defaults jni.compiler=msvc; we must pass -Djni.compiler=gcc so the
           # JNI bridge compiles with gcc (MinGW) against the MinGW-built
-          # libhttp2client.dll — the MSVC path would need a http2client.lib
+          # libhttpclient.dll — the MSVC path would need a httpclient.lib
           # import library that does not exist. The quoted -D arg is passed
           # through unchanged by PowerShell 7 to the batch file.
           .\mvnw.cmd -f "${{ github.workspace }}\java\pom.xml" clean package "-Djni.compiler=gcc" 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\java_test.log"
           if ($LASTEXITCODE -ne 0) { Write-Error "maven build failed"; exit 1 }
           # Run the test from the fat JAR (JDK 21 accepts --enable-native-access).
-          java --enable-native-access=ALL-UNNAMED -cp "build\http2-client-1.0.0.jar" Test 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\java_test.log" -Append
+          java --enable-native-access=ALL-UNNAMED -cp "build\http-client-1.0.0.jar" Test 2>&1 | Tee-Object -FilePath "${{ github.workspace }}\java_test.log" -Append
           if ($LASTEXITCODE -ne 0) { Write-Error "test failed"; exit 1 }
           Write-Output "---"
           if (Select-String -Path "${{ github.workspace }}\java_test.log" -Pattern "All tests passed" -Quiet) {
@@ -733,11 +733,11 @@ jobs:
 
       # Node.js: Windows uses a split toolchain (see nodejs/README.MD
       # "Windows (MSVC + MinGW dual-toolchain)").  The C library
-      # (libhttp2client.dll) is already built by MinGW above; the addon is
+      # (libhttpclient.dll) is already built by MinGW above; the addon is
       # compiled with MSVC via node-gyp.  build-addon.js generates the MSVC
-      # import library (http2client.lib) from the DLL using gendef (MSYS2)
+      # import library (httpclient.lib) from the DLL using gendef (MSYS2)
       # + lib.exe (MSVC), then runs node-gyp rebuild, and finally copies
-      # libhttp2client.dll + MinGW runtime DLLs next to the addon.
+      # libhttpclient.dll + MinGW runtime DLLs next to the addon.
       #
       # We run from PowerShell (not MSYS2) so node-gyp's MSVC auto-detection
       # works out of the box (windows-latest ships VS 2022).  The MSYS2
@@ -800,7 +800,7 @@ jobs:
           # Install deps WITHOUT running the install script, then build
           # explicitly so a build failure aborts before test.js runs.
           npm install --ignore-scripts
-          # build-addon.js: generates http2client.lib (gendef + lib.exe),
+          # build-addon.js: generates httpclient.lib (gendef + lib.exe),
           # runs node-gyp rebuild (MSVC), copies runtime DLLs next to addon.
           npm run build
           if ($LASTEXITCODE -ne 0) { Write-Error "addon build failed"; exit 1 }
@@ -828,12 +828,12 @@ jobs:
         shell: bash
         run: git checkout -- nodejs/package.json
 
-      # Publish the compiled shared library (libhttp2client.dll, staged next to
+      # Publish the compiled shared library (libhttpclient.dll, staged next to
       # the test/Node addon) + public headers for the release job.
       - name: Upload library artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lib-http2client-windows-latest
+          name: lib-httpclient-windows-latest
           path: |
             lib/shared/*
             include/*.h
@@ -866,7 +866,7 @@ jobs:
           cd "${{ github.workspace }}\python"
           python -m pip install --quiet build cffi wheel
           New-Item -ItemType Directory -Force lib | Out-Null
-          Copy-Item "${{ github.workspace }}\lib\shared\libhttp2client.dll" "lib\libhttp2client.dll"
+          Copy-Item "${{ github.workspace }}\lib\shared\libhttpclient.dll" "lib\libhttpclient.dll"
           python setup.py bdist_wheel --plat-name=win_amd64 --dist-dir dist
           Get-ChildItem dist
 
@@ -905,7 +905,7 @@ jobs:
       - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: '{lib-http2client-*,nodejs-addon-*,python-binding-*,python-wheel-*,java-jar-*}'
+          pattern: '{lib-httpclient-*,nodejs-addon-*,python-binding-*,python-wheel-*,java-jar-*}'
           merge-multiple: false
           path: artifacts
 
@@ -917,11 +917,11 @@ jobs:
 
       # Release layout — each component follows its language's package-manager
       # standard, published to GitHub Release as the distribution artifact:
-      #   C library     : http2client-<ver>-all.tar.gz   (linux/ macos/ win/ subdirs)
-      #   Node.js       : http2-client-nodejs-<ver>.tgz  (npm pack: prebuilds/<plat>-<arch>/
-      #                   http2addon.node + runtime DLLs, load-addon.js picks by OS+arch)
-      #   Python        : http2_client-<ver>-<plat>.whl  (3 platform wheels, self-contained)
-      #   Java          : http2-client-java-<ver>.jar    (single cross-platform fat
+      #   C library     : httpclient-<ver>-all.tar.gz   (linux/ macos/ win/ subdirs)
+      #   Node.js       : http-client-nodejs-<ver>.tgz  (npm pack: prebuilds/<plat>-<arch>/
+      #                   httpaddon.node + runtime DLLs, load-addon.js picks by OS+arch)
+      #   Python        : http_client-<ver>-<plat>.whl  (3 platform wheels, self-contained)
+      #   Java          : http-client-java-<ver>.jar    (single cross-platform fat
       #                   JAR: classes + native/linux|macos|win — works on any OS)
       - name: Package release assets
         shell: bash
@@ -941,7 +941,7 @@ jobs:
           # ── Stage per-platform bits ───────────────────────────────────────
           for os in ubuntu-latest macos-latest windows-latest; do
             plat="$(plat_of "$os")"
-            lib="artifacts/lib-http2client-${os}"
+            lib="artifacts/lib-httpclient-${os}"
             node="artifacts/nodejs-addon-${os}"
             py="artifacts/python-binding-${os}"
             jar="artifacts/java-jar-${os}"
@@ -962,30 +962,30 @@ jobs:
             case "$plat" in macos) arch=arm64;; *) arch=x64;; esac
             pb_dir="work/node/prebuilds/${plat}-${arch}"
             mkdir -p "$pb_dir"
-            # The addon lives under nodejs/build/Release/http2addon.node (Windows: build/Release/).
-            addon="$(find "$node" -name 'http2addon.node' -print -quit)"
-            [ -n "$addon" ] || { echo "::error:: http2addon.node not found in $node"; exit 1; }
-            cp "$addon" "$pb_dir/http2addon.node"
-            # Copy the shared C library (libhttp2client) next to the addon so it
+            # The addon lives under nodejs/build/Release/httpaddon.node (Windows: build/Release/).
+            addon="$(find "$node" -name 'httpaddon.node' -print -quit)"
+            [ -n "$addon" ] || { echo "::error:: httpaddon.node not found in $node"; exit 1; }
+            cp "$addon" "$pb_dir/httpaddon.node"
+            # Copy the shared C library (libhttpclient) next to the addon so it
             # loads at runtime without being installed system-wide. The .node's
             # RUNPATH includes $ORIGIN (see binding.gyp), so same-dir lookup works.
-            # Linux:   libhttp2client.so / .so.1 / .so.1.0.0 (symlink chain).
-            # macOS:   libhttp2client.dylib / .1.0.0.dylib (compatibility @rpath).
-            # Windows: libhttp2client.dll + MinGW runtime DLLs.
+            # Linux:   libhttpclient.so / .so.1 / .so.1.0.0 (symlink chain).
+            # macOS:   libhttpclient.dylib / .1.0.0.dylib (compatibility @rpath).
+            # Windows: libhttpclient.dll + MinGW runtime DLLs.
             # upload-artifact v4 may strip symlinks, so reconstruct them here.
             soname=""
             case "$plat" in
               linux)
-                soname="$(objdump -p "$pb_dir/http2addon.node" 2>/dev/null \
-                  | grep -oE 'NEEDED +libhttp2client\.so\.[0-9]+' \
-                  | grep -oE 'libhttp2client\.so\.[0-9]+' | head -1 || true)"
-                [ -z "$soname" ] && soname="libhttp2client.so.1"
+                soname="$(objdump -p "$pb_dir/httpaddon.node" 2>/dev/null \
+                  | grep -oE 'NEEDED +libhttpclient\.so\.[0-9]+' \
+                  | grep -oE 'libhttpclient\.so\.[0-9]+' | head -1 || true)"
+                [ -z "$soname" ] && soname="libhttpclient.so.1"
                 ;;
               macos)
-                soname="$(objdump -p "$pb_dir/http2addon.node" 2>/dev/null \
-                  | grep -oE 'libhttp2client\.[0-9]+\.[0-9]+\.[0-9]+\.dylib' \
+                soname="$(objdump -p "$pb_dir/httpaddon.node" 2>/dev/null \
+                  | grep -oE 'libhttpclient\.[0-9]+\.[0-9]+\.[0-9]+\.dylib' \
                   | head -1 || true)"
-                [ -z "$soname" ] && soname="libhttp2client.1.dylib"
+                [ -z "$soname" ] && soname="libhttpclient.1.dylib"
                 ;;
               win)
                 soname=""  # Windows: DLLs are found via same-dir search; no soname.
@@ -996,10 +996,10 @@ jobs:
               # Find the real library file in the lib artifact. upload-artifact
               # may have stripped symlinks, so prefer -xtype f (real files) but
               # fall back to any matching name.
-              real="$(find "$lib" \( -xtype f -o -xtype l \) -name 'libhttp2client*' -print -quit)"
+              real="$(find "$lib" \( -xtype f -o -xtype l \) -name 'libhttpclient*' -print -quit)"
               if [ -n "$real" ]; then
                 base="$(basename "$real")"
-                # Copy the real file under its soname name (e.g. libhttp2client.so.1)
+                # Copy the real file under its soname name (e.g. libhttpclient.so.1)
                 # AND its original name. npm pack strips symlinks, so we use real
                 # file copies instead of symlinks to guarantee the soname the
                 # addon's NEEDED entry points to exists in the published tarball.
@@ -1008,10 +1008,10 @@ jobs:
                 [ "$base" != "$soname" ] && cp "$real" "$pb_dir/$base"
                 echo "  staged $base as $soname"
               else
-                echo "::warning:: no libhttp2client shared lib found in $lib for $plat"
+                echo "::warning:: no libhttpclient shared lib found in $lib for $plat"
               fi
             fi
-            # Windows: the addon (MSVC) must find libhttp2client.dll + its MinGW
+            # Windows: the addon (MSVC) must find libhttpclient.dll + its MinGW
             # runtime DLLs (libgcc_s_seh-1.dll, libstdc++-6.dll, libwinpthread-1.dll)
             # in the SAME directory at load time — Node does not add other paths
             # for the DLL chain, so a missing DLL here surfaces as ERR_DLOPEN_FAILED
@@ -1038,8 +1038,8 @@ jobs:
           done
 
           # ── 1. C library: single multi-platform tarball ──────────────────
-          tar -czf "dist/http2client-${VERSION}-all.tar.gz" -C work/all/lib .
-          echo "Created dist/http2client-${VERSION}-all.tar.gz"
+          tar -czf "dist/httpclient-${VERSION}-all.tar.gz" -C work/all/lib .
+          echo "Created dist/httpclient-${VERSION}-all.tar.gz"
 
           # ── 2. Node.js: standard npm tarball with prebuilds/ ──────────────
           node_pkg="work/node-pkg"
@@ -1073,11 +1073,11 @@ jobs:
           fi
           if command -v npm >/dev/null 2>&1; then
             ( cd "$node_pkg" && npm pack )
-            mv "$node_pkg"/*.tgz "dist/http2-client-nodejs-${VERSION}.tgz"
-            echo "Created dist/http2-client-nodejs-${VERSION}.tgz"
+            mv "$node_pkg"/*.tgz "dist/http-client-nodejs-${VERSION}.tgz"
+            echo "Created dist/http-client-nodejs-${VERSION}.tgz"
           else
-            tar -czf "dist/http2-client-nodejs-${VERSION}.tgz" -C "$node_pkg" .
-            echo "Created dist/http2-client-nodejs-${VERSION}.tgz (plain tarball)"
+            tar -czf "dist/http-client-nodejs-${VERSION}.tgz" -C "$node_pkg" .
+            echo "Created dist/http-client-nodejs-${VERSION}.tgz (plain tarball)"
           fi
 
           # ── 3. Python: three platform wheels (already built per OS) ──────
@@ -1129,9 +1129,9 @@ jobs:
               exit 1
             fi
           done
-          jar cfm "dist/http2-client-java-${VERSION}.jar" \
+          jar cfm "dist/http-client-java-${VERSION}.jar" \
             work/jar-all/META-INF/MANIFEST.MF -C work/jar-all .
-          echo "Created dist/http2-client-java-${VERSION}.jar (cross-platform: native/linux|macos|win)"
+          echo "Created dist/http-client-java-${VERSION}.jar (cross-platform: native/linux|macos|win)"
 
       - name: Generate checksums
         shell: bash

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HTTP/2 Client Test
+HTTP Client Test
 
 Basic test for init / request / cleanup.
 """
@@ -27,12 +27,12 @@ def read_json_without_comments(file_path):
 
 
 def main():
-    print("=== HTTP/2 Client Test ===\n")
+    print("=== HTTP Client Test ===\n")
     passed = 0
     failed = 0
 
     # Initialize first
-    print("[Init] Initializing HTTP/2 client...")
+    print("[Init] Initializing HTTP client...")
     httpClient.init()
     print("[Init] Initialized\n")
 

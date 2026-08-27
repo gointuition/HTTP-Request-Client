@@ -35,12 +35,12 @@ function isCommentLine(line) {
         line.startsWith(';');
 }
 
-console.log('=== HTTP/2 Client — Non-Blocking Concurrency Test ===\n');
+console.log('=== HTTP Client — Non-Blocking Concurrency Test ===\n');
 
 let passed = 0;
 let failed = 0;
 
-console.log('[Init] Initializing HTTP/2 client...');
+console.log('[Init] Initializing HTTP client...');
 httpClient.init();
 console.log('[Init] ✓ Initialized\n');
 

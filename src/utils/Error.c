@@ -37,6 +37,7 @@ const Error ERR_SESSION_SOCKET_CONNECTING_REFUSED                   = { "1-0017"
 const Error ERR_SESSION_SETTINGS_TIMEOUT                            = { "1-0018", "Session settings timeout."};
 const Error ERR_SESSION_GO_AWAY                                     = { "1-0019", "Session goes away without error."};
 const Error ERR_SESSION_SSL_ALPN_HTTP2_NOT_SELECTED                 = { "1-0020", "ALPN negotiation did not select h2; server likely only supports http/1.1."};
+const Error ERR_SESSION_HTTP_1_1_REQUIRED                           = { "1-0021", "Server requires HTTP/1.1 (HTTP_1_1_REQUIRED); downgrade and retry."};
 
 // Request errors
 const Error ERR_REQUEST_PARSING_STRING_TO_JSON_FAILED               = { "2-0001", "Parsing request string to json failed."};
@@ -57,6 +58,8 @@ const Error ERR_REQUEST_SENDING_HTTP2_WINDOW_UPDATE_FRAME_FAILED    = { "2-0014"
 const Error ERR_REQUEST_UNKNOWN_PSEUDO_HEADER                       = { "2-0015", "Unknown pseudo header name."};
 const Error ERR_REQUEST_UNSUPPORTED_CLIENTHELLOID                   = { "2-0016", "Unsupported clientHelloId, e.g. hellochrome_auto / hellochrome_150 / hellocrios_auto."};
 const Error ERR_REQUEST_HEADER_ORDER_KEY_MISSING_HEADER            = { "2-0017", "A request header is not listed in the X-HeaderOrderKey ordered list."};
+const Error ERR_REQUEST_UNSUPPORTED_PROTOCOL                       = { "2-0018", "Unsupported session protocol, h2 (default) and http/1.1 supported only."};
+const Error ERR_REQUEST_SENDING_HTTP11_REQUEST_FAILED              = { "2-0019", "Sending http/1.1 request failed."};
 
 // Response errors
 const Error ERR_RESPONSE_READING_CONNECTION_ERROR                   = { "3-0001", "Response reading connection error."};
@@ -71,6 +74,7 @@ const Error ERR_RESPONSE_DEFLATE_INFLATE_FAILED                     = { "3-0009"
 const Error ERR_RESPONSE_ZSTD_INFLATE_FAILED                        = { "3-0010", "Response (zstd) Inflate failed."};
 const Error ERR_RESPONSE_INFLATE_UNKNOWN_ERROR                      = { "3-0011", "Response inflate unknown error."};
 const Error ERR_RESPONSE_RST_STREAM_ERROR                           = { "3-0012", "Response RST_STREAM unknown error."};
+const Error ERR_RESPONSE_READING_HTTP11_FAILED                      = { "3-0013", "Reading/parsing http/1.1 response failed."};
 
 // Proxy errors
 const Error ERR_PROXY_HOST_RESOLVE_FAILED                           = { "4-0001", "Proxy host resolve failed."};

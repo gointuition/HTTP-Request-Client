@@ -5,6 +5,7 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 ## Features
 
 - **HTTP/2** — full implementation: concurrent stream multiplexing over a shared connection (per-connection reader thread), HPACK dynamic table, flow control, SETTINGS/PING ACK, GOAWAY
+- **HTTP/1.1** — downgrade / fallback transport: ALPN downgrade, forced protocol via `"session": {"protocol": "http/1.1"}`, plain `http://` URLs, automatic retry on `HTTP_1_1_REQUIRED`; keep-alive session reuse and `Connection: close` handling; header order preserved on the wire; async requests queue serially on the shared connection
 - **TLS 1.3** — session resumption with `pre_shared_key` (NewSessionTicket callback)
 - **TLS fingerprint** — GREASE, ECH, ALPS, cert compression (Brotli), signature algorithms alignment
 - **Compression** — gzip, deflate, Brotli, Zstd response decompression
@@ -19,10 +20,12 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 │                 Language Bindings               │
 │     Node.js (N-API) │ Python (cffi) │ Java (JNI)│
 ├─────────────────────────────────────────────────┤
-│             libhttp2client (shared lib)         │
+│             libhttpclient (shared lib)          │
 ├─────────────────────────────────────────────────┤
-│ Http2Client → Basket → Session → RequestHandler │
-│                        → ResponseHandler        │
+│ HttpClient  → Basket → Session → Http2RequestHandler │
+│                        → Http2ResponseHandler        │
+│                        → Http11RequestHandler        │
+│                        → Http11ResponseHandler       │
 │                        → SocketHandler          │
 ├─────────────────────────────────────────────────┤
 │ SSLHandler (BoringSSL) │ CompressHandler        │
@@ -36,18 +39,21 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 
 ```
 ├── include/            # Public headers
-│   ├── Http2Client.h   # C API entry point
+│   ├── HttpClient.h    # C API entry point
 │   ├── Basket.h        # Request/Response/Session data structures
 │   ├── SSLHandler.h    # TLS layer
 │   ├── Session.h       # Connection session pool
 │   ├── Compat.h        # POSIX <-> Winsock2 networking shim
 │   └── ...
 ├── src/                # C source
-│   ├── Http2Client.c   # init / request / cleanup
+│   ├── HttpClient.c    # init / request / cleanup
 │   ├── Session.c       # Session pool + TLS session cache
 │   ├── SSLHandler.c    # Browser-like TLS configuration
-│   ├── RequestHandler.c # HTTP/2 HEADERS + DATA frames
-│   ├── ResponseHandler.c # Frame parsing, HPACK decoding
+│   ├── Http2RequestHandler.c # HTTP/2 HEADERS + DATA frames
+│   ├── Http2ResponseHandler.c # Frame parsing, HPACK decoding
+│   ├── Http11RequestHandler.c # HTTP/1.1 request building/sending + exchange orchestration
+│   ├── Http11ResponseHandler.c # HTTP/1.1 response parsing (chunked / content-length / until-close)
+│   ├── AsyncRequest.c      # fire-and-forget registry (handleRequestAsync / pollRequest)
 │   ├── CompressHandler.c # gzip/deflate/brotli/zstd
 │   └── ...
 ├── tests/              # C test programs
@@ -123,15 +129,15 @@ The networking code is written against the POSIX BSD socket API. On Windows this
 `WSAStartup` / `WSACleanup` are invoked automatically inside `initialiseEnv()` / `cleanupEnv()`, and the Winsock library (`ws2_32`) is linked automatically on Windows. No extra setup is required.
 
 This produces:
-- `lib/shared/libhttp2client.dylib` (macOS) / `.so` (Linux) / `.dll` (Windows) — shared library for language bindings
+- `lib/shared/libhttpclient.dylib` (macOS) / `.so` (Linux) / `.dll` (Windows) — shared library for language bindings
 - `test_GET` / `test_POST` — C test executables
 
 ### Build Output
 
 | Artifact | Path |
 |----------|------|
-| Shared library | `lib/shared/libhttp2client.{dylib,so,dll}` |
-| Static library | `lib/static/libhttp2client.a` |
+| Shared library | `lib/shared/libhttpclient.{dylib,so,dll}` |
+| Static library | `lib/static/libhttpclient.a` |
 | Test executables | `bin/test_GET`, `bin/test_POST` |
 
 ## BoringSSL Patches
@@ -150,7 +156,7 @@ The browser-specific values these patches consume (cipher list, signature algori
 ## C API
 
 ```c
-#include "Http2Client.h"
+#include "HttpClient.h"
 
 // 1. Initialize (call once at startup)
 void initialiseEnv(void);
@@ -179,7 +185,8 @@ void cleanupEnv(void);
 // Start a request (the request config should carry "non-blocking": 1) WITHOUT
 // waiting for the response. Returns a positive request id, or 0 on failure.
 // The calling thread returns immediately — the response is collected in the
-// background reader thread.
+// background (HTTP/2: the connection's reader thread; HTTP/1.1: a per-request
+// exchange thread serialized on the shared connection).
 long handleRequestAsync(const char *requestJSONString);
 
 // Poll an async request. Sets *outStatus to 0 (still in flight), 1 (completed)
@@ -205,7 +212,10 @@ void cleanupAsyncRequests(void);
 >   an event loop timer) and reaps the finished result. This path does not occupy
 >   a thread while waiting, so it scales independently of any thread-pool size.
 >   The request config must set `"non-blocking": 1` so the underlying socket runs
->   in `O_NONBLOCK` mode as well.
+>   in `O_NONBLOCK` mode as well. Both transports support this surface: HTTP/2
+>   multiplexes all in-flight requests on one connection; HTTP/1.1 runs one
+>   exchange at a time per connection, so queued async requests on the same host
+>   are serialized automatically.
 >
 > The language bindings build on both surfaces:
 >
@@ -218,7 +228,7 @@ void cleanupAsyncRequests(void);
 >   `poll_request` (or the `request_non_blocking` convenience) for the async
 >   surface.
 > * **Java** — `request` (blocking, call from threads / an `ExecutorService`);
->   `startRequest` + `pollRequest` (or the `requestNonBlocking` convenience) for
+>   `executeRequest` + `pollRequest` (or the `requestNonBlocking` convenience) for
 >   the async surface.
 >
 > The async surface matters when a thread pool is bounded (e.g. fewer worker
@@ -229,7 +239,7 @@ void cleanupAsyncRequests(void);
 ### Example
 
 ```c
-#include "Http2Client.h"
+#include "HttpClient.h"
 #include <stdlib.h>
 
 int main() {
@@ -291,10 +301,10 @@ int main() {
 | `connectTimeoutInMilliseconds` | `number` | TCP + TLS connect timeout |
 | `responseReadingTimeoutInMilliseconds` | `number` | Response reading timeout |
 | `decompress` | `number` | Decompression flags: 0 (none), 1 (gzip), 2 (deflate), 4 (br), 8 (zstd), or combinations (e.g. 15 = all) |
-| `non-blocking` | `number` | Socket I/O mode for the HTTP/2 transfer phase: 0 (blocking, default) or 1 (non-blocking `O_NONBLOCK` + `select`/`SSL_ERROR_WANT_*` retry) |
+| `non-blocking` | `number` | Socket I/O mode for the transfer phase (HTTP/2 and HTTP/1.1): 0 (blocking, default) or 1 (non-blocking `O_NONBLOCK` + `select`/`SSL_ERROR_WANT_*` retry) |
 | `log` | `number` | Enable logging: 0 (off), 1 (on) |
 | `proxy` | `object` | Proxy: `{ scheme, host, port, authorization? }` |
-| `session` | `object` | Session: `{ expirationInMilliseconds, clientHelloId? }` |
+| `session` | `object` | Session: `{ expirationInMilliseconds, clientHelloId?, protocol? }` |
 
 ### `session.clientHelloId`
 
@@ -308,6 +318,10 @@ Optional uTLS-style identifier that pins the TLS/HTTP/2 wire fingerprint to emul
 | `hellocrios_150` | Chrome on iOS (CriOS) 150 (version-pinned) |
 
 `_auto` always tracks the latest emulated version, while `_<version>` pins that specific profile. Matching is case-insensitive.
+
+### `session.protocol`
+
+Optional transport override. Setting `"session": { "protocol": "http/1.1" }` forces the whole exchange onto the HTTP/1.1 transport (ALPN advertises `http/1.1` only), regardless of server support. Plain `http://` URLs always run HTTP/1.1. When omitted, the transport follows ALPN negotiation (HTTP/2 preferred).
 
 ## Testing
 
@@ -368,6 +382,7 @@ cmake --build build
 |-----------|---------|---------|
 | TLS 1.3 | [BoringSSL](https://github.com/google/boringssl) | TLS handshake, session resumption, cert compression |
 | HTTP/2 | Custom implementation | Frames, HPACK, stream multiplexing, flow control |
+| HTTP/1.1 | Custom implementation | Downgrade/fallback transport: keep-alive reuse, chunked/content-length/until-close framing |
 | JSON | [Jansson](https://github.com/akheron/jansson) | Request/response JSON serialization |
 | Brotli | [Brotli](https://github.com/google/brotli) | Response decompression + TLS cert compression |
 | Zstd | [Zstd](https://github.com/facebook/zstd) | Response decompression |
@@ -379,10 +394,10 @@ Every [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releas
 
 | Component | Release artifact(s) | Standard form |
 |-----------|--------------------|---------------|
-| C library | `http2client-<ver>-all.tar.gz` | tarball with `linux/` `macos/` `win/` subdirs (lib + `include/`) |
-| Node.js | `http2-client-nodejs-<ver>.tgz` | npm package with `prebuilds/<plat>-x64/http2addon.node` |
-| Python | `http2_client-<ver>-<plat>.whl` (×3) | platform wheels, self-contained native lib inside |
-| Java | `http2-client-java-<ver>.jar` | single cross-platform fat JAR (classes + `native/linux\|macos\|win`) |
+| C library | `httpclient-<ver>-all.tar.gz` | tarball with `linux/` `macos/` `win/` subdirs (lib + `include/`) |
+| Node.js | `http-client-nodejs-<ver>.tgz` | npm package with `prebuilds/<plat>-x64/httpaddon.node` |
+| Python | `http_client-<ver>-<plat>.whl` (×3) | platform wheels, self-contained native lib inside |
+| Java | `http-client-java-<ver>.jar` | single cross-platform fat JAR (classes + `native/linux\|macos\|win`) |
 
 `<plat>` is `linux` / `macos` / `win`. A `checksums-<ver>.sha256` file is published alongside — verify before use:
 
@@ -390,7 +405,7 @@ Every [GitHub Release](https://github.com/gointuition/HTTP-Request-Client/releas
 sha256sum -c "checksums-${VER}.sha256"
 ```
 
-The C library (`libhttp2client`) must be loadable at runtime (see per-binding notes). The simplest approach is to keep it next to the binding, or add its directory to the loader path:
+The C library (`libhttpclient`) must be loadable at runtime (see per-binding notes). The simplest approach is to keep it next to the binding, or add its directory to the loader path:
 
 | Platform | Loader path env / flag |
 |----------|------------------------|

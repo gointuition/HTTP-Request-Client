@@ -31,7 +31,7 @@ function isCommentLine(line) {
 }
 
 
-console.log('HTTP/2 Client Example\n');
+console.log('HTTP Client Example\n');
 
 
 (async () => {

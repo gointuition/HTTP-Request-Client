@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HTTP/2 Client — Non-Blocking Concurrency Test
+HTTP Client — Non-Blocking Concurrency Test
 
 Unlike test_concurrency.py (which runs the blocking handleRequest on a
 ThreadPoolExecutor), this uses the async surface (start_request + poll_request):
@@ -30,12 +30,12 @@ def read_json_without_comments(file_path):
 
 
 def main():
-    print("=== HTTP/2 Client — Non-Blocking Concurrency Test ===\n")
+    print("=== HTTP Client — Non-Blocking Concurrency Test ===\n")
     passed = 0
     failed = 0
     DEFAULT_CONCURRENCY = 8
 
-    print("[Init] Initializing HTTP/2 client...")
+    print("[Init] Initializing HTTP client...")
     httpClient.init()
     print("[Init] Initialized\n")
 
