@@ -33,7 +33,8 @@ public class HttpClient {
 
     /**
      * Send an HTTP request.
-     * Corresponds to C: handleRequest(const char*, char*, size_t)
+     * Corresponds to C: handleRequest(const char*) in blocking mode
+     * ("non-blocking" is forced to 0 by the native bridge).
      *
      * @param requestJson JSON string describing the request config.
      * @return Response JSON string, or null on failure.
@@ -48,7 +49,9 @@ public class HttpClient {
 
     /**
      * Start a non-blocking request (send HEADERS/DATA, return immediately).
-     * Corresponds to C: handleRequestAsync(const char*)
+     * Corresponds to C: handleRequest(const char*) with "non-blocking" forced
+     * to 1; the returned basket handle is the id to poll via
+     * nativePollRequest.
      *
      * @param requestJson JSON string describing the request config.
      * @return Positive request id to poll, or 0 on failure.
@@ -57,7 +60,7 @@ public class HttpClient {
 
     /**
      * Poll a non-blocking request started with nativeStartRequest.
-     * Corresponds to C: pollRequest(long, int*, int*)
+     * Corresponds to C: handleResponse(long, int*, int*)
      *
      * @param requestId The id returned by nativeStartRequest.
      * @return Object[]{ Integer status (0 in-flight / 1 done / -1 failed),
@@ -263,8 +266,9 @@ public class HttpClient {
      * bounded by any thread-pool size — poll the returned id from one thread to
      * reap results as they complete.
      *
-     * @param requestJson JSON string describing the request config (should set
-     *                    "non-blocking": 1 so the socket runs in O_NONBLOCK mode).
+     * @param requestJson JSON string describing the request config (non-blocking
+     *                    mode is forced by the native bridge, the socket runs
+     *                    in O_NONBLOCK mode).
      * @return Positive request id, or 0 on failure.
      */
     public static long startRequest(String requestJson) {

@@ -6,6 +6,7 @@
   "responseReadingTimeoutInMilliseconds": 30000,
   "decompress": 15,
   "log": 1,
+  "non-blocking": 0,
   "headers": {
 //    "host": "httpbin.org",
     "host": "petstore.swagger.io",

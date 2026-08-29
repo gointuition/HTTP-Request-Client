@@ -167,7 +167,9 @@ typedef struct {
     const char  *method;
     // const char  *sessionId;
     int         decompress;
-    int         nonBlocking;    // 1 = use non-blocking socket I/O for this request
+    int         nonBlocking;    // 1 = non-blocking (async) request, 0 = blocking
+    long        requestId;      // internal async registry id (opaque to callers)
+    char        *serializedResult;  // cached response JSON kept across handleResponse retries
     int         forceHttp11;    // 1 = request forced HTTP/1.1 ("session": {"protocol": "http/1.1"})
     int         connectTimeoutInMilliseconds;
     int         responseReadingTimeoutInMilliseconds;
@@ -183,6 +185,10 @@ typedef struct {
 } Basket;
 
 Basket* buildBasket(const char *requestString);
+
+// Override the "non-blocking" field of a request JSON config. Returns a new
+// malloc'd JSON string (caller frees) or NULL when the input does not parse.
+char* setNonBlocking(const char *requestJSONString, int nonBlocking);
 
 void freeBasket(Basket *basket);
 

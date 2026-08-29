@@ -46,14 +46,13 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 │   ├── Compat.h        # POSIX <-> Winsock2 networking shim
 │   └── ...
 ├── src/                # C source
-│   ├── HttpClient.c    # init / request / cleanup
+│   ├── HttpClient.c    # init / request / cleanup + request registry (handleRequest / handleResponse)
 │   ├── Session.c       # Session pool + TLS session cache
 │   ├── SSLHandler.c    # Browser-like TLS configuration
 │   ├── Http2RequestHandler.c # HTTP/2 HEADERS + DATA frames
 │   ├── Http2ResponseHandler.c # Frame parsing, HPACK decoding
 │   ├── Http11RequestHandler.c # HTTP/1.1 request building/sending + exchange orchestration
 │   ├── Http11ResponseHandler.c # HTTP/1.1 response parsing (chunked / content-length / until-close)
-│   ├── AsyncRequest.c      # fire-and-forget registry (handleRequestAsync / pollRequest)
 │   ├── CompressHandler.c # gzip/deflate/brotli/zstd
 │   └── ...
 ├── tests/              # C test programs
@@ -161,61 +160,66 @@ The browser-specific values these patches consume (cipher list, signature algori
 // 1. Initialize (call once at startup)
 void initialiseEnv(void);
 
-// 2. Send request (two-step, thread-safe)
-//    handleRequest is a BLOCKING/synchronous call: it does not return until the
-//    response arrives, the timeout elapses, or an error occurs. Concurrency is
-//    achieved by calling it from multiple threads -- it may be called
-//    concurrently, and same-host requests share one HTTP/2 connection and are
-//    multiplexed on separate streams.
-//    Step 1: get result pointer and length
-//    requestJSONString: JSON config (see format below)
-//    outLen: output parameter for response JSON length
-//    Returns: malloc'd response JSON string, or NULL on error
-char* handleRequest(const char *requestJSONString, int *outLen);
-
-//    Step 2: copy content to your buffer (frees the source pointer)
-//    basketStr: pointer returned by handleRequest
-//    dest:      caller-allocated buffer (at least outLen + 1 bytes)
-void getBasketContent(char *basketStr, char *dest);
+// 2. Send request (unified entry, thread-safe): builds the basket and starts
+//    the request, returning the basket pointer as an intptr_t handle (0 on
+//    failure). The "non-blocking" field (default 1) selects the mode; either
+//    way the response is collected by passing the handle and a caller-owned
+//    buffer to handleResponse():
+//      non-blocking = 1 (DEFAULT): fire-and-forget — the call returns
+//      immediately; the response is collected in the background and
+//      handleResponse() polls it. The registry owns the basket until the
+//      result is fully copied out — only pass the handle to handleResponse().
+//      non-blocking = 0: BLOCKING — the call does not return until the
+//      response arrives, the timeout elapses, or an error occurs; the basket
+//      already holds the result, and handleResponse() copies it into the
+//      buffer. Concurrency is achieved by calling it from
+//      multiple threads -- it may be called concurrently, and same-host
+//      requests share one HTTP/2 connection and are multiplexed on separate
+//      streams.
+intptr_t handleRequest(const char *requestJSONString);
 
 // 3. Cleanup (call once at shutdown)
 void cleanupEnv(void);
 
-// ─── Non-blocking / async request API ───
-// Start a request (the request config should carry "non-blocking": 1) WITHOUT
-// waiting for the response. Returns a positive request id, or 0 on failure.
-// The calling thread returns immediately — the response is collected in the
-// background (HTTP/2: the connection's reader thread; HTTP/1.1: a per-request
-// exchange thread serialized on the shared connection).
-long handleRequestAsync(const char *requestJSONString);
+// ─── Response retrieval (unified) ───
+// Collect the response for a handle returned by handleRequest. The result is
+// copied into the caller-owned buffer (dest/capacity); the caller allocates
+// and frees it (who allocates, frees). Blocking baskets are already complete
+// and are copied out immediately; non-blocking requests are polled until the
+// exchange finishes (HTTP/2: the connection's reader thread; HTTP/1.1: a
+// per-request exchange thread serialized on the shared connection).
+// If the buffer is too small the full result stays cached in the basket,
+// *outLen carries the complete length, and the same handle must be passed
+// again with a buffer of at least outLen + 1 bytes.
+//   outStatus: 0 = still in flight, 1 = fully copied, 2 = complete but
+//              truncated (re-call with a bigger buffer), -1 = failed/timed out
+//   outLen:    full length of the response JSON (valid for status 1, 2, -1)
+// Once status is 1 (or -1 with the result copied) the handle is reclaimed.
+void handleResponse(intptr_t basketHandle, char *dest, int capacity, int *outStatus, int *outLen);
 
-// Poll an async request. Sets *outStatus to 0 (still in flight), 1 (completed)
-// or -1 (failed/timed out), and *outLen to the response JSON length. Returns a
-// malloc'd response JSON string only on completion (caller frees it); otherwise
-// returns NULL. On completion the request id is reclaimed.
-char* pollRequest(long requestId, int *outStatus, int *outLen);
-
-// Reap all in-flight async requests (called automatically by cleanupEnv).
+// Reap all in-flight requests (called automatically by cleanupEnv).
 void cleanupAsyncRequests(void);
 ```
 
-> **Two concurrency models.** The core offers both a blocking and a non-blocking
-> surface:
+> **Two concurrency models.** The core offers both a non-blocking and a
+> blocking surface:
 >
-> * **`handleRequest` (blocking)** — synchronous: the calling thread blocks until
->   the response is fully read, the timeout fires, or an error is returned.
->   Concurrency is achieved by calling it from multiple threads (thread-safe);
->   same-host requests are multiplexed over one shared HTTP/2 connection.
->
-> * **`handleRequestAsync` + `pollRequest` (non-blocking)** — the request is sent
->   and the call returns immediately with an id; the caller polls later (e.g. on
->   an event loop timer) and reaps the finished result. This path does not occupy
->   a thread while waiting, so it scales independently of any thread-pool size.
->   The request config must set `"non-blocking": 1` so the underlying socket runs
->   in `O_NONBLOCK` mode as well. Both transports support this surface: HTTP/2
+> * **`handleRequest` non-blocking mode (default)** — `handleRequest` sends the
+>   request and returns immediately with a basket handle; the caller passes it
+>   to `handleResponse` later (e.g. on an event loop timer) and reaps
+>   the finished result. This path does not occupy a thread while waiting, so
+>   it scales independently of any thread-pool size, and the underlying socket
+>   runs in `O_NONBLOCK` mode. Both transports support this mode: HTTP/2
 >   multiplexes all in-flight requests on one connection; HTTP/1.1 runs one
->   exchange at a time per connection, so queued async requests on the same host
->   are serialized automatically.
+>   exchange at a time per connection, so queued non-blocking requests on the
+>   same host are serialized automatically.
+>
+> * **`handleRequest` blocking mode** — set `"non-blocking": 0` in the request
+>   config: the call blocks until the response is fully read, the timeout
+>   fires, or an error is returned; passing the handle and a buffer to
+>   `handleResponse` then copies the finished result out immediately.
+>   Concurrency is achieved by calling from multiple threads (thread-safe);
+>   same-host requests are multiplexed over one shared HTTP/2 connection.
 >
 > The language bindings build on both surfaces:
 >
@@ -230,6 +234,10 @@ void cleanupAsyncRequests(void);
 > * **Java** — `request` (blocking, call from threads / an `ExecutorService`);
 >   `executeRequest` + `pollRequest` (or the `requestNonBlocking` convenience) for
 >   the async surface.
+>
+> The bindings' blocking wrappers force `"non-blocking": 0` and the async
+> wrappers force `"non-blocking": 1`, so each surface keeps its semantics
+> regardless of the caller's config.
 >
 > The async surface matters when a thread pool is bounded (e.g. fewer worker
 > threads than in-flight requests): a single thread can drive arbitrarily many
@@ -250,8 +258,9 @@ int main() {
         "  \"url\": \"https://tls.peet.ws/api/all\","\n"
         "  \"connectTimeoutInMilliseconds\": 3000,"\n"
         "  \"responseReadingTimeoutInMilliseconds\": 30000,"\n"
-        "  \"decompress\": 0,"\n"
-        "  \"log\": 1,"\n"
+        "  \"decompress\": 0,\n"
+        "  \"log\": 1,\n"
+        "  \"non-blocking\": 0,\n"
         "  \"headers\": {"\n"
         "    \"host\": \"tls.peet.ws\","\n"
         "    \"user-agent\": \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36\","\n"
@@ -274,15 +283,31 @@ int main() {
         "  \"session\": { \"expirationInMilliseconds\": 300000 }"\n"
         "}";
 
-    // Step 1: get result pointer and length
-    int len = 0;
-    char *result = handleRequest(request, &len);
-    if (result != NULL && len > 0) {
-        // Step 2: allocate exact buffer, copy content (frees result internally)
-        char *buf = malloc(len + 1);
-        getBasketContent(result, buf);
-        printf("%s\n", buf);
-        free(buf);
+    // Step 1: run the request in blocking mode; the returned basket handle
+    // already points at the finished result
+    intptr_t handle = handleRequest(request);
+    if (handle != 0) {
+        // Step 2: collect the result into a caller-owned buffer
+        int capacity = 1024 * 1024;
+        char *buf = malloc(capacity);
+        if (buf != NULL) {
+            int status = 0;
+            int len = 0;
+            handleResponse(handle, buf, capacity, &status, &len);
+            if (status == 2) {
+                // buffer too small: grow to the full length and re-collect
+                char *bigger = realloc(buf, len + 1);
+                if (bigger != NULL) {
+                    buf = bigger;
+                    capacity = len + 1;
+                    handleResponse(handle, buf, capacity, &status, &len);
+                }
+            }
+            if (status == 1) {
+                printf("%s\n", buf);
+            }
+            free(buf);
+        }
     }
 
     cleanupEnv();
@@ -301,7 +326,7 @@ int main() {
 | `connectTimeoutInMilliseconds` | `number` | TCP + TLS connect timeout |
 | `responseReadingTimeoutInMilliseconds` | `number` | Response reading timeout |
 | `decompress` | `number` | Decompression flags: 0 (none), 1 (gzip), 2 (deflate), 4 (br), 8 (zstd), or combinations (e.g. 15 = all) |
-| `non-blocking` | `number` | Socket I/O mode for the transfer phase (HTTP/2 and HTTP/1.1): 0 (blocking, default) or 1 (non-blocking `O_NONBLOCK` + `select`/`SSL_ERROR_WANT_*` retry) |
+| `non-blocking` | `number` | Request mode: 1 (default) = fire-and-forget — `handleRequest` returns a basket handle immediately and the socket runs in `O_NONBLOCK` (`select`/`SSL_ERROR_WANT_*` retry); the response is reaped by passing the handle to `handleResponse`. 0 = blocking — `handleRequest` waits for the whole exchange and returns a handle to the completed basket |
 | `log` | `number` | Enable logging: 0 (off), 1 (on) |
 | `proxy` | `object` | Proxy: `{ scheme, host, port, authorization? }` |
 | `session` | `object` | Session: `{ expirationInMilliseconds, clientHelloId?, protocol? }` |

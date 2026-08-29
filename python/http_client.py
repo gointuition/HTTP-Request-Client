@@ -20,10 +20,10 @@ ffi = FFI()
 ffi.cdef("""
     void initialiseEnv(void);
     void cleanupEnv(void);
-    char* handleRequest(const char *requestJSONString, int *outLen);
-    void getBasketContent(char *basketStr, char *dest);
-    long handleRequestAsync(const char *requestJSONString);
-    char* pollRequest(long requestId, int *outStatus, int *outLen);
+    intptr_t handleRequest(const char *requestJSONString);
+    char* setNonBlocking(const char *requestJSONString, int nonBlocking);
+    void free(void *ptr);
+    void handleResponse(intptr_t basketHandle, char *dest, int capacity, int *outStatus, int *outLen);
 """)
 
 
@@ -127,20 +127,34 @@ class HttpClient:
         # Encode to bytes for cffi
         request_bytes = self._config_to_bytes(config)
 
-        # Step 1: call handleRequest to get the result pointer and length
-        out_len = ffi.new("int *")
-        result = self._lib.handleRequest(request_bytes, out_len)
-        actual_len = out_len[0]
+        # Force blocking mode: handleRequest picks the mode from "non-blocking"
+        blocking_json = self._lib.setNonBlocking(request_bytes, 0)
+        if blocking_json == ffi.NULL:
+            raise RuntimeError("invalid request config")
 
-        if result != ffi.NULL and actual_len > 0:
-            # Step 2: allocate exact buffer and get content (getBasketContent frees result)
-            buffer = ffi.new("char[]", actual_len + 1)
-            self._lib.getBasketContent(result, buffer)
-            # ffi.string reads up to NUL or specified length
-            result_bytes = ffi.buffer(buffer, actual_len)[:]
-            return result_bytes.decode("utf-8")
-        else:
-            raise RuntimeError(f"handleRequest failed")
+        # Run the blocking exchange, then collect the completed result into a
+        # caller-owned buffer
+        handle = self._lib.handleRequest(blocking_json)
+        self._lib.free(blocking_json)
+        if handle == 0:
+            raise RuntimeError("handleRequest failed")
+
+        capacity = 1024 * 1024
+        buffer = ffi.new("char[]", capacity)
+        out_status = ffi.new("int *")
+        out_len = ffi.new("int *")
+        self._lib.handleResponse(handle, buffer, capacity, out_status, out_len)
+        if out_status[0] == 2:
+            # response bigger than the buffer: grow and re-collect
+            capacity = out_len[0] + 1
+            buffer = ffi.new("char[]", capacity)
+            self._lib.handleResponse(handle, buffer, capacity, out_status, out_len)
+
+        status = out_status[0]
+        actual_len = out_len[0]
+        if status == 1 and actual_len > 0:
+            return ffi.buffer(buffer, actual_len)[:].decode("utf-8")
+        raise RuntimeError("handleRequest failed")
 
     def _config_to_bytes(self, config):
         """Convert a request config (dict or JSON string) to encoded bytes."""
@@ -160,15 +174,21 @@ class HttpClient:
         concurrent requests is not bounded by any thread-pool size — poll the id
         from one thread to reap results as they complete.
 
-        :param config: Request configuration dict or JSON string (should set
-                       "non-blocking": 1 so the socket runs in O_NONBLOCK mode).
+        :param config: Request configuration dict or JSON string (non-blocking
+                       mode is forced by this call, "non-blocking" is pinned
+                       to 1 so the socket runs in O_NONBLOCK mode).
         :return: Positive request id, or 0 on failure.
         """
         if not self._initialized:
             self.init()
 
         request_bytes = self._config_to_bytes(config)
-        return self._lib.handleRequestAsync(request_bytes)
+        async_json = self._lib.setNonBlocking(request_bytes, 1)
+        if async_json == ffi.NULL:
+            return 0
+        handle = self._lib.handleRequest(async_json)
+        self._lib.free(async_json)
+        return handle
 
     def poll_request(self, request_id):
         """
@@ -183,16 +203,22 @@ class HttpClient:
         if not self._initialized:
             self.init()
 
+        capacity = 1024 * 1024
+        buffer = ffi.new("char[]", capacity)
         out_status = ffi.new("int *")
         out_len = ffi.new("int *")
-        result = self._lib.pollRequest(request_id, out_status, out_len)
+        self._lib.handleResponse(request_id, buffer, capacity, out_status, out_len)
+        if out_status[0] == 2:
+            # response bigger than the buffer: grow and re-collect
+            capacity = out_len[0] + 1
+            buffer = ffi.new("char[]", capacity)
+            self._lib.handleResponse(request_id, buffer, capacity, out_status, out_len)
+
         status = out_status[0]
         actual_len = out_len[0]
 
         data = None
-        if result != ffi.NULL and actual_len > 0:
-            buffer = ffi.new("char[]", actual_len + 1)
-            self._lib.getBasketContent(result, buffer)
+        if status != 0 and actual_len > 0:
             data = ffi.buffer(buffer, actual_len)[:].decode("utf-8")
 
         return status, data

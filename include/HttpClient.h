@@ -10,6 +10,8 @@
 #ifndef HttpClient_h
 #define HttpClient_h
 
+#include <stdint.h>
+
 #include "Basket.h"
 #include "Version.h"
 
@@ -44,22 +46,31 @@ void cleanupEnv(void);
 
 int connectTo(const char *hostname, const char *port);
 
-char* handleRequest(const char *requestJSONString, int *outLen);
+// Unified request entry: builds the basket and starts the request, returning
+// the basket pointer as an intptr_t handle (0 on failure). The "non-blocking"
+// field (default 1) selects the mode; either way the response is collected by
+// passing the handle (and a caller-owned buffer) to handleResponse():
+//   non-blocking (default): runs in the background; handleResponse() polls the
+//   request until it completes. The registry owns the basket until the result
+//   is fully copied out — only pass the handle to handleResponse().
+//   blocking ("non-blocking": 0): the whole exchange finishes before returning;
+//   handleResponse() copies the already-complete result into the buffer.
+intptr_t handleRequest(const char *requestJSONString);
 
-void getBasketContent(char *basketStr, char *dest);
+// ─── Response retrieval (unified) ───
+// Collect the response for a handle returned by handleRequest(). The result
+// is copied into the caller-owned buffer (dest/capacity); the caller allocates
+// and frees it. If the buffer is too small the full result is kept in the
+// basket, *outLen carries the complete length, and the same handle must be
+// passed again with a buffer of at least outLen + 1 bytes.
+//   outStatus: 0 = still in flight, 1 = fully copied, 2 = complete but
+//              truncated (re-call with a bigger buffer), -1 = failed/timed out
+//   outLen:    full length of the response JSON (valid for status 1, 2, -1)
+// Once status is 1 (or -1 with the result copied) the handle is reclaimed and
+// must not be used again.
+void handleResponse(intptr_t basketHandle, char *dest, int capacity, int *outStatus, int *outLen);
 
-// ─── Non-blocking / async request API ───
-// Start a request (must carry "non-blocking": 1) without waiting for the
-// response. Returns a positive request id to poll, or 0 on failure.
-long handleRequestAsync(const char *requestJSONString);
-
-// Poll an async request. Sets *outStatus to 0 (in flight), 1 (completed) or -1
-// (failed/timed out), and *outLen to the length of the returned JSON string.
-// Returns a malloc'd response JSON string only on completion (caller frees it);
-// otherwise returns NULL. On completion the id is reclaimed.
-char* pollRequest(long requestId, int *outStatus, int *outLen);
-
-// Reap all in-flight async requests (call at shutdown).
+// Reap all in-flight requests (call at shutdown).
 void cleanupAsyncRequests(void);
 
 void executeRequest(Basket *basket, Stream **outStream, int waitForResponse);

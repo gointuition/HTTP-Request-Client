@@ -65,7 +65,7 @@ static void sbAppendStr(StrBuf *sb, const char *s);
 
 // async=0 runs the whole exchange inline (sync handleRequest); async=1 moves it
 // to a background thread and returns right after it is started, mirroring the
-// HTTP/2 fire-and-forget flow (pollRequest reaps the result via stream->isEnded).
+// HTTP/2 fire-and-forget flow (handleResponse reaps the result via stream->isEnded).
 void handleHttp11Request(Basket *basket, Stream *stream, int async) {
     if (async) {
         handleHttp11RequestAsync(basket, stream);
@@ -91,7 +91,7 @@ static void handleHttp11RequestAsync(Basket *basket, Stream *stream) {
         free(exchange);
         stream -> error = ERR_REQUEST_SENDING_HTTP11_REQUEST_FAILED;
         basket -> error = stream -> error;
-        endStream(stream); // let pollRequest() reap it as completed-with-error
+        endStream(stream); // let handleResponse() reap it as completed-with-error
         return;
     }
     pthread_detach(thread);

@@ -3,10 +3,10 @@
 //
 // Non-blocking concurrency test. Unlike test_Concurrency.c (which spawns one
 // thread per request, each blocking in handleRequest), this test exercises the
-// async surface: handleRequestAsync() fires every request and returns
-// immediately, then a single thread reaps the results with pollRequest(). The
-// number of in-flight requests is therefore not bounded by any thread count —
-// a single thread drives all of them.
+// async surface: handleRequest() on a non-blocking request fires and returns
+// immediately, then a single thread reaps the results with handleResponse().
+// The number of in-flight requests is therefore not bounded by any thread
+// count — a single thread drives all of them.
 //
 
 #include <stdio.h>
@@ -93,8 +93,9 @@ int main(int argc, char *argv[]) {
     if (concurrency < 1) { concurrency = 1; }
     if (concurrency > MAX_REQUESTS) { concurrency = MAX_REQUESTS; }
 
-    // Force the non-blocking socket I/O mode for the async surface, and drop the
-    // test-only "concurrency" field before handing the config to the core.
+    // Force the non-blocking mode: it selects the fire-and-forget surface and
+    // runs the socket in O_NONBLOCK. Drop the test-only "concurrency" field
+    // before handing the config to the core.
     json_object_set_new(config, "non-blocking", json_integer(1));
     json_object_del(config, "concurrency");
 
@@ -110,15 +111,13 @@ int main(int argc, char *argv[]) {
 
     // Step 1: fire every request without blocking. This loop returns almost
     // instantly even though none of the responses have arrived yet.
-    long ids[MAX_REQUESTS];
+    intptr_t ids[MAX_REQUESTS];
     int started = 0;
     for (int i = 0; i < concurrency; i++) {
-        long id = handleRequestAsync(requestJson);
-        if (id == 0) {
+        ids[i] = handleRequest(requestJson);
+        if (ids[i] == 0) {
             LOG("ERROR", "failed to start request #%d (id=0)", i);
-            ids[i] = 0;
         } else {
-            ids[i] = id;
             started++;
         }
     }
@@ -132,25 +131,33 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < concurrency; i++) {
             if (ids[i] == 0) { continue; } // already reaped (or never started)
 
+            int capacity = 1024 * 1024;
+            char *dest = malloc(capacity);
+            if (dest == NULL) {
+                failed++;
+                pending--;
+                ids[i] = 0;
+                continue;
+            }
+
             int status = 0;
             int outLen = 0;
-            char *result = pollRequest(ids[i], &status, &outLen);
+            handleResponse(ids[i], dest, capacity, &status, &outLen);
+            if (status == 2) {
+                char *bigger = realloc(dest, (size_t) outLen + 1);
+                if (bigger != NULL) {
+                    dest = bigger;
+                    capacity = outLen + 1;
+                    handleResponse(ids[i], dest, capacity, &status, &outLen);
+                }
+            }
             if (status == 0) {
+                free(dest);
                 continue; // still in flight
             }
             pending--;
 
-            if (status == 1 && result != NULL && outLen > 0) {
-                char *dest = malloc(outLen + 1);
-                if (dest == NULL) {
-                    free(result);
-                    failed++;
-                    ids[i] = 0;
-                    continue;
-                }
-                getBasketContent(result, dest); // copies into dest and frees result
-                dest[outLen] = '\0';
-
+            if (status == 1) {
                 if (validateBasket(dest)) {
                     // extract stream id for the summary
                     json_t *root = json_loads(dest, 0, NULL);
@@ -172,9 +179,7 @@ int main(int argc, char *argv[]) {
                 free(dest);
             } else {
                 printf("  #%d FAILED (status=%d)\n", i, status);
-                if (result != NULL) {
-                    free(result);
-                }
+                free(dest);
                 failed++;
             }
             ids[i] = 0; // mark reaped

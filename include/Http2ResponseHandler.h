@@ -29,4 +29,18 @@ void finalizeStreamIntoBasket(Basket *basket, Stream *stream);
 // fields already transferred to a basket).
 void freeStreamBuffers(Stream *stream);
 
+// ─── Connection reader thread ───
+// Per-connection reader thread entry (arg = Session*): owns SSL_read,
+// accumulates bytes, parses frame headers and routes each frame via
+// readerDispatch. Exits when session->readerRunning is cleared.
+void* readerLoop(void *arg);
+
+// Stop the reader thread (no-op when it was never started).
+void stopReader(Session *session);
+
+// Wake up streams that will never complete. With onlyPending set, only
+// streams that have not received any response yet are failed (graceful
+// GOAWAY); otherwise every unfinished stream is failed (connection loss).
+void failAllStreams(Session *session, int onlyPending);
+
 #endif //HTTP2RESPONSEHANDLER_H

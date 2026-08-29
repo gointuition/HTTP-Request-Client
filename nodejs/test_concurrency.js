@@ -56,6 +56,20 @@ async function runTests() {
         const concurrency = config.concurrency || CONCURRENCY;
         delete config.concurrency; // test-only field; strip before the native call
 
+        // Warm-up: establish and pool the shared connection so the burst below
+        // reuses it (multiplexing) instead of a burst of cold connects, which
+        // remote servers often throttle. Mirrors the C/Python/Java tests.
+        console.log(`  warming up the shared connection...`);
+        const warmT0 = Date.now();
+        const warmParsed = JSON.parse(await httpClient.requestAsync(config));
+        const warmError = warmParsed.error && warmParsed.error.code ? warmParsed.error.code : null;
+        if (warmError != null) {
+            console.log(`  warm-up FAILED ${warmError} (${Date.now() - warmT0}ms)`);
+            throw new Error(`could not establish the shared connection: ${warmError}`);
+        }
+        const warmBytes = warmParsed.response && warmParsed.response.payload ? warmParsed.response.payload.length : 0;
+        console.log(`  warm-up OK (stream ${warmParsed.session && warmParsed.session.streamId}, ${warmBytes} bytes, ${Date.now() - warmT0}ms); connection is now pooled`);
+
         console.log(`  firing ${concurrency} requests to ${config.url}`);
         const startTime = Date.now();
         const results = await Promise.all(

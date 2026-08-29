@@ -60,9 +60,9 @@ class HttpClient {
      * Send an HTTP request in non-blocking mode. The native call starts the
      * request (send HEADERS/DATA) and returns immediately with a request id; the
      * response is then polled on a timer, so the event loop never blocks and
-     * UV_THREADPOOL_SIZE is irrelevant. The request config must carry
-     * "non-blocking": 1 (the C core selects non-blocking socket I/O).
-     * @param {Object|string} config - Request configuration (should set "non-blocking": 1)
+     * UV_THREADPOOL_SIZE is irrelevant. Non-blocking mode is forced by this
+     * wrapper (the C core selects non-blocking socket I/O).
+     * @param {Object|string} config - Request configuration
      * @param {number} [pollIntervalMs=5] - Poll interval in milliseconds
      * @returns {Promise<string>} Resolves with the response JSON string
      */

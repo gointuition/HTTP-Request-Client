@@ -8,6 +8,7 @@
   "responseReadingTimeoutInMilliseconds": 15000,
   "decompress": 0,
   "log": 0,
+  "non-blocking": 0,
   // Test-only field: number of concurrent requests fired via Promise.all onto
   // ONE shared connection. Stripped by test.js before the native call.
   "concurrency": 8,

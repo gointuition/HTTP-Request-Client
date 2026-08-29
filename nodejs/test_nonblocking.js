@@ -1,8 +1,8 @@
 // Non-blocking concurrency test. Unlike test_concurrency.js (whose requestAsync
 // runs the blocking handleRequest on a libuv worker, hence the
 // UV_THREADPOOL_SIZE=1 serialization), requestNonBlocking() sends the request
-// and returns immediately via the async C surface (handleRequestAsync +
-// pollRequest). The event loop never blocks and no worker thread is occupied
+// and returns immediately via the async C surface (handleRequest on a
+// non-blocking request + handleResponse). The event loop never blocks and no worker thread is occupied
 // while waiting, so UV_THREADPOOL_SIZE is irrelevant here.
 process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || '1';
 

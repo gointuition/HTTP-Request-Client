@@ -15,6 +15,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 /* ── Forward declarations from the native C library (include/HttpClient.h) ──
  *
@@ -24,10 +25,9 @@
  */
 extern void initialiseEnv(void);
 extern void cleanupEnv(void);
-extern char* handleRequest(const char *requestJSONString, int *outLen);
-extern void getBasketContent(char *basketStr, char *dest);
-extern long handleRequestAsync(const char *requestJSONString);
-extern char* pollRequest(long requestId, int *outStatus, int *outLen);
+extern intptr_t handleRequest(const char *requestJSONString);   /* returns basket pointer as intptr_t, 0 = failure */
+extern char* setNonBlocking(const char *requestJSONString, int nonBlocking);
+extern void handleResponse(intptr_t basketHandle, char *dest, int capacity, int *outStatus, int *outLen);
 
 /* Buffer size must match HttpClient.java BUFFER_SIZE (1 MB) */
 #define BRIDGE_BUFFER_SIZE (1024 * 1024)
@@ -56,32 +56,50 @@ JNIEXPORT jstring JNICALL Java_HttpClient_nativeRequest(JNIEnv *env, jclass cls,
         return NULL; /* OutOfMemoryError already thrown by JVM */
     }
 
-    int actualLen = 0;
-    char *result = handleRequest(requestStr, &actualLen);
-
+    /* pin blocking mode: handleRequest picks the mode from "non-blocking" */
+    char *blockingJson = setNonBlocking(requestStr, 0);
     (*env)->ReleaseStringUTFChars(env, requestJson, requestStr);
-
-    if (result != NULL && actualLen > 0) {
-        if (actualLen >= BRIDGE_BUFFER_SIZE) {
-            actualLen = BRIDGE_BUFFER_SIZE - 1;
-        }
-        /* Copy the basket into a per-call heap buffer (NOT a shared static one):
-         * nativeRequest is invoked concurrently from multiple Java threads, so a
-         * shared buffer would race and return corrupted/interleaved responses.
-         * getBasketContent copies the content into the buffer and frees result. */
-        char *buffer = malloc(actualLen + 1);
-        if (buffer == NULL) {
-            free(result);
-            return NULL; /* OOM: return null; caller treats it as a failed request */
-        }
-        getBasketContent(result, buffer);
-        buffer[actualLen] = '\0';
-        jstring out = (*env)->NewStringUTF(env, buffer);
-        free(buffer);
-        return out;
+    if (blockingJson == NULL) {
+        return NULL;
     }
 
-    return NULL;
+    const intptr_t handle = handleRequest(blockingJson);
+    free(blockingJson);
+    if (handle == 0) {
+        return NULL;
+    }
+
+    /* Per-call heap buffer (NOT a shared static one): nativeRequest is
+     * invoked concurrently from multiple Java threads, so a shared buffer
+     * would race and return corrupted/interleaved responses. */
+    int capacity = BRIDGE_BUFFER_SIZE;
+    char *buffer = malloc(capacity);
+    if (buffer == NULL) {
+        return NULL; /* OOM: return null; caller treats it as a failed request */
+    }
+
+    int status = 0;
+    int actualLen = 0;
+    handleResponse(handle, buffer, capacity, &status, &actualLen);
+    if (status == 2) {
+        /* Response bigger than the bridge buffer: grow and re-collect. */
+        char *bigger = realloc(buffer, (size_t) actualLen + 1);
+        if (bigger == NULL) {
+            free(buffer);
+            return NULL;
+        }
+        buffer = bigger;
+        capacity = actualLen + 1;
+        handleResponse(handle, buffer, capacity, &status, &actualLen);
+    }
+
+    if (status != 1) {
+        free(buffer);
+        return NULL;
+    }
+    jstring out = (*env)->NewStringUTF(env, buffer);
+    free(buffer);
+    return out;
 }
 
 /*
@@ -101,7 +119,8 @@ JNIEXPORT void JNICALL Java_HttpClient_nativeCleanup(JNIEnv *env, jclass cls) {
  * Signature: (Ljava/lang/String;)J
  *
  * Non-blocking request: sends HEADERS/DATA and returns immediately with a
- * request id (0 = start failed). Mirrors handleRequestAsync().
+ * basket handle (0 = start failed). Mirrors handleRequest() on a request
+ * carrying "non-blocking": 1 (forced here).
  */
 JNIEXPORT jlong JNICALL Java_HttpClient_nativeStartRequest(JNIEnv *env, jclass cls, jstring requestJson) {
     (void)cls;
@@ -111,10 +130,16 @@ JNIEXPORT jlong JNICALL Java_HttpClient_nativeStartRequest(JNIEnv *env, jclass c
         return 0; /* OutOfMemoryError already thrown by JVM */
     }
 
-    long id = handleRequestAsync(requestStr);
+    char *asyncJson = setNonBlocking(requestStr, 1);
     (*env)->ReleaseStringUTFChars(env, requestJson, requestStr);
+    if (asyncJson == NULL) {
+        return 0;
+    }
 
-    return (jlong) id;
+    const intptr_t handle = handleRequest(asyncJson);
+    free(asyncJson);
+
+    return (jlong) handle;
 }
 
 /*
@@ -126,22 +151,37 @@ JNIEXPORT jlong JNICALL Java_HttpClient_nativeStartRequest(JNIEnv *env, jclass c
  *   [0] = Integer status (0 = in flight, 1 = completed, -1 = failed/timeout)
  *   [1] = String  response JSON (only when status != 0), or null
  */
-JNIEXPORT jobjectArray JNICALL Java_HttpClient_nativePollRequest(JNIEnv *env, jclass cls, jlong requestId) {
+JNIEXPORT jobjectArray JNICALL Java_HttpClient_nativePollRequest(JNIEnv *env, jclass cls, jlong basketHandle) {
     (void)cls;
+
+    int capacity = BRIDGE_BUFFER_SIZE;
+    char *buffer = malloc(capacity);
+    if (buffer == NULL) {
+        return NULL;
+    }
 
     int status = 0;
     int outLen = 0;
-    char *result = pollRequest((long) requestId, &status, &outLen);
+    handleResponse((intptr_t) basketHandle, buffer, capacity, &status, &outLen);
+    if (status == 2) {
+        /* Response bigger than the bridge buffer: grow and re-collect. */
+        char *bigger = realloc(buffer, (size_t) outLen + 1);
+        if (bigger != NULL) {
+            buffer = bigger;
+            capacity = outLen + 1;
+            handleResponse((intptr_t) basketHandle, buffer, capacity, &status, &outLen);
+        }
+    }
 
     /* Build Object[]{ Integer status, String data|null } */
     jclass objectClass = (*env)->FindClass(env, "java/lang/Object");
     if (objectClass == NULL) {
-        if (result != NULL) free(result);
+        free(buffer);
         return NULL;
     }
     jobjectArray arr = (*env)->NewObjectArray(env, 2, objectClass, NULL);
     if (arr == NULL) {
-        if (result != NULL) free(result);
+        free(buffer);
         return NULL;
     }
 
@@ -158,24 +198,14 @@ JNIEXPORT jobjectArray JNICALL Java_HttpClient_nativePollRequest(JNIEnv *env, jc
         (*env)->DeleteLocalRef(env, integerClass);
     }
 
-    if (result != NULL && outLen > 0) {
-        if (outLen >= BRIDGE_BUFFER_SIZE) {
-            outLen = BRIDGE_BUFFER_SIZE - 1;
-        }
-        char *buffer = malloc(outLen + 1);
-        if (buffer != NULL) {
-            getBasketContent(result, buffer); /* copies into buffer and frees result */
-            buffer[outLen] = '\0';
-            jstring dataStr = (*env)->NewStringUTF(env, buffer);
-            free(buffer);
-            if (dataStr != NULL) {
-                (*env)->SetObjectArrayElement(env, arr, 1, dataStr);
-                (*env)->DeleteLocalRef(env, dataStr);
-            }
-        } else {
-            free(result);
+    if (status != 0 && outLen > 0) {
+        jstring dataStr = (*env)->NewStringUTF(env, buffer);
+        if (dataStr != NULL) {
+            (*env)->SetObjectArrayElement(env, arr, 1, dataStr);
+            (*env)->DeleteLocalRef(env, dataStr);
         }
     }
+    free(buffer);
 
     return arr;
 }

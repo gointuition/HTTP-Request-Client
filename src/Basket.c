@@ -327,6 +327,8 @@ void initBasket(Basket * basket) {
 
     basket -> decompress = 1;
     basket -> nonBlocking = 1;
+    basket -> requestId = 0;
+    basket -> serializedResult = NULL;
     basket -> forceHttp11 = 0;
 }
 
@@ -712,9 +714,29 @@ static size_t processCookies(RequestHeader *headers, size_t idx, const char *coo
     return idx;
 }
 
+// Override the "non-blocking" field of a request JSON config (binding layers
+// use it to pin the blocking/async mode regardless of the caller's config).
+char* setNonBlocking(const char *requestJSONString, int nonBlocking) {
+    json_error_t error;
+    json_t *jsonRequest = json_loads(requestJSONString, 0, &error);
+    if (jsonRequest == NULL) {
+        LOG("ERROR", "failed to parse request json: %s (line %d)", error.text, error.line);
+        return NULL;
+    }
+    json_object_set_new(jsonRequest, "non-blocking", json_integer(nonBlocking != 0 ? 1 : 0));
+    char *result = json_dumps(jsonRequest, JSON_COMPACT);
+    json_decref(jsonRequest);
+    return result;
+}
+
 void freeBasket(Basket *basket) {
     if (basket == NULL) {
         return;
+    }
+    // free the cached serialized response (kept across handleResponse retries)
+    if (basket -> serializedResult != NULL) {
+        free(basket -> serializedResult);
+        basket -> serializedResult = NULL;
     }
     // free url
     if (basket -> url != NULL) {

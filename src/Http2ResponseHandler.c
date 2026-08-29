@@ -4,13 +4,18 @@
 
 #include "Http2ResponseHandler.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
 #include <ctype.h>
+#ifndef _WIN32
+#include <sys/select.h>
+#endif
 
 #include "Compat.h"
 
 #include "SSLHandler.h"
+#include "Http2RequestHandler.h"
 #include "Error.h"
 #include "CompressHandler.h"
 #include "Log.h"
@@ -111,21 +116,210 @@ typedef enum {
     ENCODING_ZSTD = 8
 } ContentEncoding;
 
+static void readerDispatch(Session *session, unsigned char *payload, uint32_t length,
+                           uint8_t type, uint8_t flags, uint32_t streamId);
+static Stream* findStream(Session *session, uint32_t streamId);
 static void handleDataFrame(Stream *stream, unsigned char *payload, uint32_t length);
 static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t length, uint8_t flags, HpackContext *ctx);
+static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t length, HpackContext *ctx);
+// static HpackContext *initHpackContext(Basket *basket);
+static void getHeaderFromTable(size_t index, char **name, char **value, HpackContext *ctx);
+static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *name, const char *value);
+static void freeResponseHeader(ResponseHeader *header);
 static void handleRST_STREAMFrame(Session *session, Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId);
 static void handleSettingsFrame(unsigned char *payload, uint32_t length);
 static void handleWindowUpdateFrame(unsigned char *payload, uint32_t length, uint32_t streamId);
 static void handleGoAwayFrame(Session *session, unsigned char *payload, uint32_t length);
 static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPayload, size_t combinedPayloadSize);
-// static HpackContext *initHpackContext(Basket *basket);
-static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t length, HpackContext *ctx);
-static void getHeaderFromTable(size_t index, char **name, char **value, HpackContext *ctx);
-static void freeResponseHeader(ResponseHeader *header);
-static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *name, const char *value);
+static ContentEncoding detectContentEncoding(Basket *basket);
 static const char* getSettingsName(uint16_t id);
 static const char* getErrorName(uint32_t code);
-static ContentEncoding detectContentEncoding(Basket *basket);
+
+void* readerLoop(void *arg) {
+    Session *session = (Session *) arg;
+    SSL *ssl = session -> ssl;
+    int fd = SSL_get_fd(ssl);
+
+    // Each SSL_read is gated behind select() with a short timeout so this loop
+    // can observe readerRunning and exit promptly on shutdown. SSL_pending() is
+    // checked first: one TLS record can hold several frames already decrypted
+    // and buffered inside the SSL object, with nothing left readable at the
+    // socket layer. The socket may be blocking (default) or non-blocking (the
+    // request set "non-blocking": 1); in the latter case SSL_read returns
+    // SSL_ERROR_WANT_READ/WANT_WRITE and we re-select accordingly.
+    //
+    // Known limitation: this SSL_read runs concurrently with the request threads'
+    // SSL_write (serialized among themselves via writeMutex). Under TLS 1.3 a
+    // post-handshake message (e.g. KeyUpdate) can make SSL_read emit a write from
+    // inside this thread, bypassing writeMutex and racing a concurrent SSL_write.
+    // It is rare for these short-lived connections and currently left unhandled.
+    unsigned char *acc = NULL;
+    size_t accSize = 0;
+    // When the socket is in non-blocking mode, an SSL_read may return
+    // SSL_ERROR_WANT_WRITE (e.g. a TLS 1.3 KeyUpdate needs to be emitted). Track
+    // the last WANT_* direction so the next select() waits on the right fd set
+    // instead of spinning on readability.
+    int wantWrite = 0;
+
+    while (session -> readerRunning) {
+        if (SSL_pending(ssl) == 0) {
+            fd_set rfds, wfds;
+            FD_ZERO(&rfds);
+            FD_ZERO(&wfds);
+            FD_SET(fd, &rfds);
+            if (wantWrite) {
+                FD_SET(fd, &wfds);
+            }
+            struct timeval tv;
+            tv.tv_sec = 0;
+            tv.tv_usec = 100000; // 100ms: bounds shutdown latency, not response latency
+
+            int sr = select(fd + 1, &rfds, wantWrite ? &wfds : NULL, NULL, &tv);
+            if (sr == 0) {
+                continue; // timeout: re-check readerRunning
+            }
+            if (sr < 0) {
+#ifndef _WIN32
+                if (errno == EINTR) { continue; }
+#endif
+                LOG("ERROR", "reader: select() failed: %s (errno: %d)", strerror(errno), errno);
+                session -> connError = ERR_RESPONSE_READING_CONNECTION_ERROR;
+                session -> goingAway = 1;
+                failAllStreams(session, 0);
+                break;
+            }
+        }
+
+        unsigned char buffer[16384];
+        int bytesRead = SSL_read(ssl, buffer, sizeof(buffer));
+
+        if (bytesRead > 0) {
+            wantWrite = 0;
+            unsigned char *newAcc = realloc(acc, accSize + bytesRead);
+            if (newAcc == NULL) {
+                LOG("ERROR", "reader: accumulation buffer allocation failed");
+                session -> connError = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+                session -> goingAway = 1;
+                failAllStreams(session, 0);
+                break;
+            }
+            acc = newAcc;
+            memcpy(acc + accSize, buffer, bytesRead);
+            accSize += bytesRead;
+
+            // Parse as many complete frames (9-byte header + payload) as buffered.
+            size_t offset = 0;
+            while (offset + 9 <= accSize) {
+                uint32_t frameLength = (acc[offset] << 16) | (acc[offset + 1] << 8) | acc[offset + 2];
+                uint8_t frameType = acc[offset + 3];
+                uint8_t frameFlags = acc[offset + 4];
+                uint32_t streamId = ((acc[offset + 5] & 0x7F) << 24) | (acc[offset + 6] << 16) | (acc[offset + 7] << 8) | acc[offset + 8];
+
+                if (offset + 9 + frameLength > accSize) {
+                    break; // wait for the rest of this frame
+                }
+
+                readerDispatch(session, acc + offset + 9, frameLength, frameType, frameFlags, streamId);
+                offset += 9 + frameLength;
+            }
+
+            if (offset > 0) {
+                size_t remaining = accSize - offset;
+                if (remaining > 0) {
+                    memmove(acc, acc + offset, remaining);
+                }
+                accSize = remaining;
+            }
+        } else {
+            int err = SSL_get_error(ssl, bytesRead);
+            if (err == SSL_ERROR_WANT_READ) {
+                wantWrite = 0;
+                continue; // not enough for a full record yet; re-select
+            }
+            if (err == SSL_ERROR_WANT_WRITE) {
+                wantWrite = 1;
+                continue; // SSL wants to flush a pending record; wait for writability
+            }
+            // bytesRead == 0 (peer closed) or a fatal error: end all streams.
+            LOG("DEBUG", "reader: connection closed/error (ret=%d, err=%d)", bytesRead, err);
+            session -> goingAway = 1;
+            failAllStreams(session, 0);
+            break;
+        }
+    }
+
+    if (acc) { free(acc); }
+    return NULL;
+}
+
+void stopReader(Session *session) {
+    if (session -> readerStarted) {
+        session -> readerRunning = 0;
+        pthread_join(session -> reader, NULL);
+        session -> readerStarted = 0;
+    }
+}
+
+// Route one parsed frame either to its target stream (locked) or, for
+// connection-level frames and frames for unknown/closed streams, straight to
+// the frame handler with a NULL stream. Runs only on the reader thread, so the
+// shared HPACK context is touched by a single thread in wire-arrival order.
+static void readerDispatch(Session *session, unsigned char *payload, uint32_t length,
+                           uint8_t type, uint8_t flags, uint32_t streamId) {
+    // DATA(0x0) / HEADERS(0x1) / RST_STREAM(0x3) are stream-scoped.
+    if (type == 0x0 || type == 0x1 || type == 0x3) {
+        pthread_mutex_lock(&session -> streamsMutex);
+        Stream *stream = findStream(session, streamId);
+        if (stream != NULL) {
+            pthread_mutex_lock(&stream -> lock);
+            pthread_mutex_unlock(&session -> streamsMutex);
+            handleStreamFrame(session, stream, payload, length, type, flags, streamId);
+            if (stream -> isEnded) {
+                pthread_cond_signal(&stream -> cond);
+            }
+            pthread_mutex_unlock(&stream -> lock);
+        } else {
+            pthread_mutex_unlock(&session -> streamsMutex);
+            // Unknown/closed stream: still process (HEADERS keep HPACK in sync).
+            handleStreamFrame(session, NULL, payload, length, type, flags, streamId);
+        }
+    } else {
+        // Connection-level frame (SETTINGS/WINDOW_UPDATE/GOAWAY/PING/...).
+        handleStreamFrame(session, NULL, payload, length, type, flags, streamId);
+        if (type == 0x4 && (flags & 0x1) == 0) {
+            // Server SETTINGS (not an ACK): the peer must be acknowledged with
+            // an empty SETTINGS frame carrying the ACK flag, or a strict server
+            // (e.g. nghttp2) GOAWAYs with SETTINGS_TIMEOUT. Serialize the write
+            // with the request threads via writeMutex.
+            static const unsigned char settingsAck[9] = {0, 0, 0, 0x4, 0x1, 0, 0, 0, 0};
+            pthread_mutex_lock(&session -> writeMutex);
+            sslWriteAllEx(session -> ssl, session -> nonBlocking, 5000, settingsAck, sizeof(settingsAck));
+            pthread_mutex_unlock(&session -> writeMutex);
+        } else if (type == 0x6 && (flags & 0x1) == 0 && length == 8) {
+            // PING (not an ACK): echo the 8-byte opaque payload back with the
+            // ACK flag set so a keep-alive probe on a long-lived multiplexed
+            // connection does not tear it down.
+            unsigned char pingAck[17] = {0, 0, 8, 0x6, 0x1, 0, 0, 0, 0};
+            memcpy(pingAck + 9, payload, 8);
+            pthread_mutex_lock(&session -> writeMutex);
+            sslWriteAllEx(session -> ssl, session -> nonBlocking, 5000, pingAck, sizeof(pingAck));
+            pthread_mutex_unlock(&session -> writeMutex);
+        }
+        if (type == 0x7) { // GOAWAY: fail streams that have no response yet
+            failAllStreams(session, 1);
+        }
+    }
+}
+
+// Caller must hold session->streamsMutex.
+static Stream* findStream(Session *session, uint32_t streamId) {
+    for (int i = 0; i < MAX_CONCURRENT_STREAMS_PER_SESSION; i++) {
+        if (session -> streams[i] != NULL && session -> streams[i] -> streamId == streamId) {
+            return session -> streams[i];
+        }
+    }
+    return NULL;
+}
 
 // Process a single fully-buffered HTTP/2 frame. Called from the connection
 // reader thread with `stream` locked (or NULL for connection-level frames and
@@ -178,52 +372,6 @@ void handleStreamFrame(Session *session, Stream *stream,
     if (stream && (type == 0x0 || type == 0x1) && (flags & 0x1)) {
         stream -> isEnded = 1;
         LOG("DEBUG", "Stream %u ended.", streamId);
-    }
-}
-
-void finalizeStreamIntoBasket(Basket *basket, Stream *stream) {
-    pthread_mutex_lock(&stream -> lock);
-
-    // On any stream/connection error, propagate it and leave the buffers for
-    // freeStreamBuffers. Retryable errors (GOAWAY/SETTINGS_TIMEOUT) let the
-    // caller retry with a clean basket.
-    if (stream -> error.code != NULL) {
-        basket -> error = stream -> error;
-        pthread_mutex_unlock(&stream -> lock);
-        return;
-    }
-
-    // Transfer ownership of headers and payload out of the stream.
-    basket -> response.headers = stream -> headers;
-    basket -> response.numHeaders = stream -> numHeaders;
-    stream -> headers = NULL;
-    stream -> numHeaders = 0;
-
-    unsigned char *combinedPayload = stream -> combinedPayload;
-    size_t combinedPayloadSize = stream -> combinedPayloadSize;
-    stream -> combinedPayload = NULL;
-    stream -> combinedPayloadSize = 0;
-
-    pthread_mutex_unlock(&stream -> lock);
-
-    // Decompression can be slow; run it without holding the stream lock.
-    finalizeResponsePayload(basket, combinedPayload, combinedPayloadSize);
-}
-
-void freeStreamBuffers(Stream *stream) {
-    if (!stream) { return; }
-    if (stream -> headers) {
-        for (size_t i = 0; i < stream -> numHeaders; i++) {
-            freeResponseHeader(&stream -> headers[i]);
-        }
-        free(stream -> headers);
-        stream -> headers = NULL;
-        stream -> numHeaders = 0;
-    }
-    if (stream -> combinedPayload) {
-        free(stream -> combinedPayload);
-        stream -> combinedPayload = NULL;
-        stream -> combinedPayloadSize = 0;
     }
 }
 
@@ -322,190 +470,6 @@ static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t 
 
     // Call the existing decoder logic, passing ctx
     decodeHeadersFrame(stream, payloadStart, payloadSize, ctx);
-}
-
-static void handleRST_STREAMFrame(Session *session, Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId) {
-    // RST_STREAM frame payload is 4 bytes, including a 32 bits error code
-    if (length == 4) {
-        const uint32_t errorCode = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
-        const char *errorName = getErrorName(errorCode);
-        LOG("WARN", "RST_STREAM received for Stream %u. Error Code: 0x%x (%s)",
-            streamId, errorCode, errorName);
-        if (errorCode == 0xd) {
-            // HTTP_1_1_REQUIRED: the server refuses HTTP/2 on this connection;
-            // surface a retryable error so the request is retried over HTTP/1.1
-            // and stop reusing the connection.
-            stream -> error = ERR_SESSION_HTTP_1_1_REQUIRED;
-            session -> connError = ERR_SESSION_HTTP_1_1_REQUIRED;
-            session -> goingAway = 1;
-        } else {
-            stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
-            stream -> error.msg = errorName;
-        }
-    } else {
-        LOG("ERROR", "Invalid RST_STREAM frame length: %u", length);
-        stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
-        stream -> error.msg = "Invalid RST_STREAM frame length";
-    }
-}
-
-/**
-+------------------+------------------+
-|       Identifier (16)              |  --- 2 bytes
-+------------------+------------------+
-|                   Value (32)       |  --- 4 bytes
-+-----------------------------------+
-**/
-static void handleSettingsFrame(unsigned char *payload, uint32_t length) {
-    for (size_t i = 0; i + 6 <= length; i += 6) {
-        // reading a 16-bit SETTINGS frame in big-endian format means the high-order byte comes first
-        uint16_t id = (payload[i] << 8) | payload[i + 1];
-        uint32_t value = (payload[i + 2] << 24) | (payload[i + 3] << 16) | (payload[i + 4] << 8) | payload[i + 5];
-        const char *name = getSettingsName(id);
-        LOG("DEBUG", "SETTINGS: %s (0x%04x) = %u", name ? name : "UNKNOWN", id, value);
-    }
-}
-
-/**
-+-----------------------------------------------+
-|                 Length (24)                   |
-+---------------+---------------+---------------+
-|   Type (8)    |   Flags (8)   |
-+-+-------------+---------------+---------------+
-|R|                 Stream Identifier (31)      |
-+=+=============================================+
-|                   Window Size Increment (32)  |
-+---------------------------------------------------------------+
-
-The Window Size Increment feiled MUST be treated as unsigned 31-bit integer
-The high bit (bit 31) must be ignored (& 0x7FFFFFFF)
- */
-static void handleWindowUpdateFrame(unsigned char *payload, uint32_t length, uint32_t streamId) {
-    if (length == 4) {
-        const uint32_t increment = ((payload[0] & 0x7F) << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
-        LOG("DEBUG", "WINDOW_UPDATE: Stream %u, Increment %u", streamId, increment);
-    }
-}
-
-/**
-+-----------------------------------------------+
-|                 Length (24)                   |
-+---------------+---------------+---------------+
-|   Type (8)    |   Flags (8)   |
-+-+-------------+---------------+---------------+
-|R|                 Stream Identifier (31)      |
-+=+=============================================+
-|                   Last-Stream-ID (31)         |
-+-----------------------------------------------+
-|                        Error Code (32)        |
-+-----------------------------------------------+
-|                  Additional Debug Data (*)     |
-+---------------------------------------------------------------+
-*/
-static void handleGoAwayFrame(Session *session, unsigned char *payload, uint32_t length) {
-    if (length >= 8) {
-        uint32_t lastStreamId = ((payload[0] & 0x7F) << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
-        uint32_t errorCode = (payload[4] << 24) | (payload[5] << 16) | (payload[6] << 8) | payload[7];
-        LOG("DEBUG", "GOAWAY: Last Stream %u, Error 0x%x (%s)", lastStreamId, errorCode, getErrorName(errorCode));
-        // Mark the connection so it is no longer reused; the reader then fails
-        // any still-pending streams (those without a response yet) with this
-        // error so their request threads can retry on a fresh connection.
-        if (errorCode == 0x4) {
-            session -> connError = ERR_SESSION_SETTINGS_TIMEOUT;
-        } else if (errorCode == 0xd) {
-            // HTTP_1_1_REQUIRED: pending streams fail with this retryable error
-            // and are retried over a fresh HTTP/1.1 session.
-            session -> connError = ERR_SESSION_HTTP_1_1_REQUIRED;
-        } else {
-            session -> connError = ERR_SESSION_GO_AWAY;
-        }
-        session -> goingAway = 1;
-    }
-}
-
-static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPayload, size_t combinedPayloadSize) {
-    if (combinedPayloadSize == 0) {
-        // TODO empty body
-        LOG("DEBUG", "no response...");
-        basket -> response.payload = NULL;
-        return;
-    }
-
-    const ContentEncoding encoding = detectContentEncoding(basket);
-    if (encoding == ENCODING_IDENTITY) {
-        LOG("DEBUG", "plain text...");
-        // ensure null-termination for json_string() in basketToString
-        unsigned char *terminated = realloc(combinedPayload, combinedPayloadSize + 1);
-        if (!terminated) {
-            basket -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
-            free(combinedPayload);
-            return;
-        }
-        terminated[combinedPayloadSize] = '\0';
-        basket -> response.payload = terminated;
-        basket -> response.payloadSize = combinedPayloadSize;
-        return;
-    }
-
-    if ((basket -> decompress & encoding) == 0) {
-        LOG("DEBUG", "not decompress...");
-        basket -> response.payload = base64Encode(combinedPayload, combinedPayloadSize);
-        basket -> response.payloadSize = combinedPayloadSize;
-        free(combinedPayload);
-        return;
-    }
-
-    DecompressedObj *decompressedObj = NULL;
-    // // gzip magic number 0x1F 0x8B
-    // if (size >= 2 && combinedPayload[0] == 0x1F && combinedPayload[1] == 0x8B) {
-    if (encoding == ENCODING_GZIP) {
-        decompressedObj = decompress_GZip(combinedPayload, combinedPayloadSize);
-    } else if (encoding == ENCODING_BROTLI) {
-        decompressedObj = decompress_Brotli(combinedPayload, combinedPayloadSize);
-    } else if (encoding == ENCODING_DEFLATE) {
-        decompressedObj = decompress_Deflate(combinedPayload, combinedPayloadSize);
-    } else if (encoding == ENCODING_ZSTD) {
-        decompressedObj = decompress_Zstd(combinedPayload, combinedPayloadSize);
-    }
-
-    if (decompressedObj == NULL || decompressedObj -> error.code != NULL) {
-        basket -> error = ERR_RESPONSE_INFLATE_UNKNOWN_ERROR;
-        free(combinedPayload);
-        return;
-    }
-    if (decompressedObj -> error.code != NULL) {
-        basket -> error = decompressedObj -> error;
-        if (decompressedObj -> decompressedPayload != NULL) {
-            free(decompressedObj -> decompressedPayload);
-        }
-        free(decompressedObj);
-        free(combinedPayload);
-        return;
-    }
-
-    basket -> response.payload = decompressedObj -> decompressedPayload;
-    free(decompressedObj);
-    free(combinedPayload);
-}
-
-static ContentEncoding detectContentEncoding(Basket *basket) {
-    for (size_t i = 0; i < basket -> response.numHeaders; i++) {
-        if (strcasecmp(basket -> response.headers[i].name, "content-encoding") == 0) {
-            if (strcasecmp(basket -> response.headers[i].value, "gzip") == 0) { return ENCODING_GZIP; }
-            if (strcasecmp(basket -> response.headers[i].value, "br") == 0) { return ENCODING_BROTLI; }
-            if (strcasecmp(basket -> response.headers[i].value, "deflate") == 0) { return ENCODING_DEFLATE; }
-            if (strcasecmp(basket -> response.headers[i].value, "zstd") == 0) { return ENCODING_ZSTD; }
-            break;
-        }
-    }
-    return ENCODING_IDENTITY;
-}
-
-static const char* getSettingsName(uint16_t id) {
-    for (size_t i = 0; i < sizeof(http2SettingsFrame) / sizeof(http2SettingsFrame[0]); i++) {
-        if (http2SettingsFrame[i].id == id) return http2SettingsFrame[i].name;
-    }
-    return NULL;
 }
 
 static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t length, HpackContext *ctx) {
@@ -761,18 +725,6 @@ static void getHeaderFromTable(size_t index, char **name, char **value, HpackCon
     }
 }
 
-static void freeResponseHeader(ResponseHeader *header) {
-    if (!header) return;
-    if (header->name && header->freeName) {
-        free(header->name);
-        header->name = NULL;
-    }
-    if (header->value && header->freeValue) {
-        free(header->value);
-        header->value = NULL;
-    }
-}
-
 static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *name, const char *value) {
     size_t entrySize = strlen(name) + strlen(value) + 32; // 32 HPack overhead
 
@@ -810,6 +762,146 @@ static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *nam
     ctx -> dynamicTableMaxSize -= entrySize;
 }
 
+static void freeResponseHeader(ResponseHeader *header) {
+    if (!header) return;
+    if (header->name && header->freeName) {
+        free(header->name);
+        header->name = NULL;
+    }
+    if (header->value && header->freeValue) {
+        free(header->value);
+        header->value = NULL;
+    }
+}
+
+static void handleRST_STREAMFrame(Session *session, Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId) {
+    // RST_STREAM frame payload is 4 bytes, including a 32 bits error code
+    if (length == 4) {
+        const uint32_t errorCode = (payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
+        const char *errorName = getErrorName(errorCode);
+        LOG("WARN", "RST_STREAM received for Stream %u. Error Code: 0x%x (%s)",
+            streamId, errorCode, errorName);
+        if (errorCode == 0xd) {
+            // HTTP_1_1_REQUIRED: the server refuses HTTP/2 on this connection;
+            // surface a retryable error so the request is retried over HTTP/1.1
+            // and stop reusing the connection.
+            stream -> error = ERR_SESSION_HTTP_1_1_REQUIRED;
+            session -> connError = ERR_SESSION_HTTP_1_1_REQUIRED;
+            session -> goingAway = 1;
+        } else {
+            stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
+            stream -> error.msg = errorName;
+        }
+    } else {
+        LOG("ERROR", "Invalid RST_STREAM frame length: %u", length);
+        stream -> error = ERR_RESPONSE_RST_STREAM_ERROR;
+        stream -> error.msg = "Invalid RST_STREAM frame length";
+    }
+}
+
+/**
++------------------+------------------+
+|       Identifier (16)              |  --- 2 bytes
++------------------+------------------+
+|                   Value (32)       |  --- 4 bytes
++-----------------------------------+
+**/
+static void handleSettingsFrame(unsigned char *payload, uint32_t length) {
+    for (size_t i = 0; i + 6 <= length; i += 6) {
+        // reading a 16-bit SETTINGS frame in big-endian format means the high-order byte comes first
+        uint16_t id = (payload[i] << 8) | payload[i + 1];
+        uint32_t value = (payload[i + 2] << 24) | (payload[i + 3] << 16) | (payload[i + 4] << 8) | payload[i + 5];
+        const char *name = getSettingsName(id);
+        LOG("DEBUG", "SETTINGS: %s (0x%04x) = %u", name ? name : "UNKNOWN", id, value);
+    }
+}
+
+/**
++-----------------------------------------------+
+|                 Length (24)                   |
++---------------+---------------+---------------+
+|   Type (8)    |   Flags (8)   |
++-+-------------+---------------+---------------+
+|R|                 Stream Identifier (31)      |
++=+=============================================+
+|                   Window Size Increment (32)  |
++---------------------------------------------------------------+
+
+The Window Size Increment feiled MUST be treated as unsigned 31-bit integer
+The high bit (bit 31) must be ignored (& 0x7FFFFFFF)
+ */
+static void handleWindowUpdateFrame(unsigned char *payload, uint32_t length, uint32_t streamId) {
+    if (length == 4) {
+        const uint32_t increment = ((payload[0] & 0x7F) << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
+        LOG("DEBUG", "WINDOW_UPDATE: Stream %u, Increment %u", streamId, increment);
+    }
+}
+
+/**
++-----------------------------------------------+
+|                 Length (24)                   |
++---------------+---------------+---------------+
+|   Type (8)    |   Flags (8)   |
++-+-------------+---------------+---------------+
+|R|                 Stream Identifier (31)      |
++=+=============================================+
+|                   Last-Stream-ID (31)         |
++-----------------------------------------------+
+|                        Error Code (32)        |
++-----------------------------------------------+
+|                  Additional Debug Data (*)     |
++---------------------------------------------------------------+
+*/
+static void handleGoAwayFrame(Session *session, unsigned char *payload, uint32_t length) {
+    if (length >= 8) {
+        uint32_t lastStreamId = ((payload[0] & 0x7F) << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3];
+        uint32_t errorCode = (payload[4] << 24) | (payload[5] << 16) | (payload[6] << 8) | payload[7];
+        LOG("DEBUG", "GOAWAY: Last Stream %u, Error 0x%x (%s)", lastStreamId, errorCode, getErrorName(errorCode));
+        // Mark the connection so it is no longer reused; the reader then fails
+        // any still-pending streams (those without a response yet) with this
+        // error so their request threads can retry on a fresh connection.
+        if (errorCode == 0x4) {
+            session -> connError = ERR_SESSION_SETTINGS_TIMEOUT;
+        } else if (errorCode == 0xd) {
+            // HTTP_1_1_REQUIRED: pending streams fail with this retryable error
+            // and are retried over a fresh HTTP/1.1 session.
+            session -> connError = ERR_SESSION_HTTP_1_1_REQUIRED;
+        } else {
+            session -> connError = ERR_SESSION_GO_AWAY;
+        }
+        session -> goingAway = 1;
+    }
+}
+
+// Wake up streams that will never complete. With onlyPending set, only streams
+// that have not received any response yet are failed (used for a graceful
+// GOAWAY, so streams already receiving data can finish); otherwise every
+// unfinished stream is failed (used on connection loss).
+void failAllStreams(Session *session, int onlyPending) {
+    pthread_mutex_lock(&session -> streamsMutex);
+    for (int i = 0; i < MAX_CONCURRENT_STREAMS_PER_SESSION; i++) {
+        Stream *stream = session -> streams[i];
+        if (stream == NULL) { continue; }
+        pthread_mutex_lock(&stream -> lock);
+        if (!stream -> isEnded && (!onlyPending || stream -> numHeaders == 0)) {
+            stream -> error = session -> connError.code != NULL
+                              ? session -> connError
+                              : ERR_RESPONSE_READING_CONNECTION_ERROR;
+            stream -> isEnded = 1;
+            pthread_cond_signal(&stream -> cond);
+        }
+        pthread_mutex_unlock(&stream -> lock);
+    }
+    pthread_mutex_unlock(&session -> streamsMutex);
+}
+
+static const char* getSettingsName(uint16_t id) {
+    for (size_t i = 0; i < sizeof(http2SettingsFrame) / sizeof(http2SettingsFrame[0]); i++) {
+        if (http2SettingsFrame[i].id == id) return http2SettingsFrame[i].name;
+    }
+    return NULL;
+}
+
 // HTTP/2 error code to name mapping
 static const struct {
     uint32_t code;
@@ -836,4 +928,128 @@ static const char* getErrorName(uint32_t code) {
         if (code == HTTP2ErrorNames[i].code) { return HTTP2ErrorNames[i].name; }
     }
     return "STREAM_UNKNOWN_ERROR";
+}
+
+void finalizeStreamIntoBasket(Basket *basket, Stream *stream) {
+    pthread_mutex_lock(&stream -> lock);
+
+    // On any stream/connection error, propagate it and leave the buffers for
+    // freeStreamBuffers. Retryable errors (GOAWAY/SETTINGS_TIMEOUT) let the
+    // caller retry with a clean basket.
+    if (stream -> error.code != NULL) {
+        basket -> error = stream -> error;
+        pthread_mutex_unlock(&stream -> lock);
+        return;
+    }
+
+    // Transfer ownership of headers and payload out of the stream.
+    basket -> response.headers = stream -> headers;
+    basket -> response.numHeaders = stream -> numHeaders;
+    stream -> headers = NULL;
+    stream -> numHeaders = 0;
+
+    unsigned char *combinedPayload = stream -> combinedPayload;
+    size_t combinedPayloadSize = stream -> combinedPayloadSize;
+    stream -> combinedPayload = NULL;
+    stream -> combinedPayloadSize = 0;
+
+    pthread_mutex_unlock(&stream -> lock);
+
+    // Decompression can be slow; run it without holding the stream lock.
+    finalizeResponsePayload(basket, combinedPayload, combinedPayloadSize);
+}
+
+static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPayload, size_t combinedPayloadSize) {
+    if (combinedPayloadSize == 0) {
+        // TODO empty body
+        LOG("DEBUG", "no response...");
+        basket -> response.payload = NULL;
+        return;
+    }
+
+    const ContentEncoding encoding = detectContentEncoding(basket);
+    if (encoding == ENCODING_IDENTITY) {
+        LOG("DEBUG", "plain text...");
+        // ensure null-termination for json_string() in basketToString
+        unsigned char *terminated = realloc(combinedPayload, combinedPayloadSize + 1);
+        if (!terminated) {
+            basket -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+            free(combinedPayload);
+            return;
+        }
+        terminated[combinedPayloadSize] = '\0';
+        basket -> response.payload = terminated;
+        basket -> response.payloadSize = combinedPayloadSize;
+        return;
+    }
+
+    if ((basket -> decompress & encoding) == 0) {
+        LOG("DEBUG", "not decompress...");
+        basket -> response.payload = base64Encode(combinedPayload, combinedPayloadSize);
+        basket -> response.payloadSize = combinedPayloadSize;
+        free(combinedPayload);
+        return;
+    }
+
+    DecompressedObj *decompressedObj = NULL;
+    // // gzip magic number 0x1F 0x8B
+    // if (size >= 2 && combinedPayload[0] == 0x1F && combinedPayload[1] == 0x8B) {
+    if (encoding == ENCODING_GZIP) {
+        decompressedObj = decompress_GZip(combinedPayload, combinedPayloadSize);
+    } else if (encoding == ENCODING_BROTLI) {
+        decompressedObj = decompress_Brotli(combinedPayload, combinedPayloadSize);
+    } else if (encoding == ENCODING_DEFLATE) {
+        decompressedObj = decompress_Deflate(combinedPayload, combinedPayloadSize);
+    } else if (encoding == ENCODING_ZSTD) {
+        decompressedObj = decompress_Zstd(combinedPayload, combinedPayloadSize);
+    }
+
+    if (decompressedObj == NULL || decompressedObj -> error.code != NULL) {
+        basket -> error = ERR_RESPONSE_INFLATE_UNKNOWN_ERROR;
+        free(combinedPayload);
+        return;
+    }
+    if (decompressedObj -> error.code != NULL) {
+        basket -> error = decompressedObj -> error;
+        if (decompressedObj -> decompressedPayload != NULL) {
+            free(decompressedObj -> decompressedPayload);
+        }
+        free(decompressedObj);
+        free(combinedPayload);
+        return;
+    }
+
+    basket -> response.payload = decompressedObj -> decompressedPayload;
+    free(decompressedObj);
+    free(combinedPayload);
+}
+
+static ContentEncoding detectContentEncoding(Basket *basket) {
+    for (size_t i = 0; i < basket -> response.numHeaders; i++) {
+        if (strcasecmp(basket -> response.headers[i].name, "content-encoding") == 0) {
+            if (strcasecmp(basket -> response.headers[i].value, "gzip") == 0) { return ENCODING_GZIP; }
+            if (strcasecmp(basket -> response.headers[i].value, "br") == 0) { return ENCODING_BROTLI; }
+            if (strcasecmp(basket -> response.headers[i].value, "deflate") == 0) { return ENCODING_DEFLATE; }
+            if (strcasecmp(basket -> response.headers[i].value, "zstd") == 0) { return ENCODING_ZSTD; }
+            break;
+        }
+    }
+    return ENCODING_IDENTITY;
+}
+
+void freeStreamBuffers(Stream *stream) {
+    if (!stream) { return; }
+    if (stream -> headers) {
+        for (size_t i = 0; i < stream -> numHeaders; i++) {
+            freeResponseHeader(&stream -> headers[i]);
+        }
+        free(stream -> headers);
+        stream -> headers = NULL;
+        stream -> numHeaders = 0;
+    }
+    if (stream -> combinedPayload) {
+        free(stream -> combinedPayload);
+        stream -> combinedPayload = NULL;
+        stream -> combinedPayloadSize = 0;
+    }
 }

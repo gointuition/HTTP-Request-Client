@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <time.h>
 #include <signal.h>
@@ -32,30 +33,58 @@ static long elapsedMs(struct timespec *from, struct timespec *to) {
     return (to -> tv_sec - from -> tv_sec) * 1000 + (to -> tv_nsec - from -> tv_nsec) / 1000000;
 }
 
+// Copy the response of a finished handle into a caller-owned buffer; on
+// status 2 (complete but truncated) grow the buffer and re-collect. Returns
+// a malloc'd NUL-terminated response JSON on status 1, otherwise NULL.
+static char* collectResponse(intptr_t handle, int *outLen) {
+    int capacity = 1024 * 1024;
+    char *dest = malloc(capacity);
+    if (dest == NULL) {
+        return NULL;
+    }
+
+    int status = 0;
+    int len = 0;
+    handleResponse(handle, dest, capacity, &status, &len);
+    if (status == 2) {
+        char *bigger = realloc(dest, (size_t) len + 1);
+        if (bigger == NULL) {
+            free(dest);
+            return NULL;
+        }
+        dest = bigger;
+        capacity = len + 1;
+        handleResponse(handle, dest, capacity, &status, &len);
+    }
+
+    if (status != 1) {
+        free(dest);
+        return NULL;
+    }
+    if (outLen != NULL) {
+        *outLen = len;
+    }
+    return dest;
+}
+
 // Run one full request lifecycle and record the outcome into w.
 static void doRequest(const char *requestStr, Worker *w) {
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    int actualLen = 0;
-    char *result = handleRequest(requestStr, &actualLen);
+    const intptr_t handle = handleRequest(requestStr);
+    char *basketStr = NULL;
+    if (handle != 0) {
+        basketStr = collectResponse(handle, NULL);
+    }
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
     w -> ms = elapsedMs(&t0, &t1);
 
-    if (result == NULL || actualLen <= 0) {
+    if (basketStr == NULL) {
         snprintf(w -> errCode, sizeof(w -> errCode), "NO_RESULT");
         return;
     }
-
-    // getBasketContent copies the content into basketStr and frees result.
-    char *basketStr = malloc(actualLen + 1);
-    if (basketStr == NULL) {
-        free(result);
-        snprintf(w -> errCode, sizeof(w -> errCode), "OOM");
-        return;
-    }
-    getBasketContent(result, basketStr);
 
     json_error_t error;
     json_t *root = json_loads(basketStr, 0, &error);

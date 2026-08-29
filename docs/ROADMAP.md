@@ -8,8 +8,8 @@
 - [x] **HTTP/1.1** — Protocol downgrade / fallback compatibility support: ALPN downgrade (server picks `http/1.1` or selects nothing), forced protocol via `"session": {"protocol": "http/1.1"}`, plain `http://` URLs (absolute-form through proxies without CONNECT), and automatic retry over HTTP/1.1 on `HTTP_1_1_REQUIRED` (RST_STREAM / GOAWAY 0xd)
 - [x] **HTTP/1.1 Headers Order** - preserve order of headers
 - [x] **HTTP/1.1 Connection** - keep-alive, close
-- [x] **HTTP/1.1 Non-Blocking** — `handleRequestAsync` over the serial HTTP/1.1 transport: the exchange (send + response read) runs on a background thread serialized by the session's writeMutex, so fire-and-forget returns immediately and `pollRequest` reaps the result via `stream->isEnded`
-- [ ] **HTTP/1.1 Headers** - Compare with real browsers 
+- [x] **HTTP/1.1 Non-Blocking** — `handleRequest` over the serial HTTP/1.1 transport: the exchange (send + response read) runs on a background thread serialized by the session's writeMutex, so fire-and-forget returns immediately and `handleResponse` reaps the result via `stream->isEnded`
+- [ ] **HTTP/1.1 Headers** - Compare with real browsers with an mitm
 - [ ] **Other Browser Fingerprints** — TLS/HTTP2 fingerprint profiles for Firefox, Safari, Edge (enums defined, fingerprint data pending)
 - [ ] **Other Platforms** — Support for Windows / macOS / iOS / Android (enums defined, logic pending)
 - [x] **Different Versions** — Support for different browser versions, default auto 

@@ -1,6 +1,7 @@
 #include <node_api.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 // Forward-declare the C library API directly to avoid pulling in the full
 // header chain (Basket.h -> pthread.h, openssl/ssl.h, ...) which requires
@@ -9,10 +10,9 @@
 extern "C" {
     void initialiseEnv(void);
     void cleanupEnv(void);
-    char* handleRequest(const char *requestJSONString, int *outLen);
-    void getBasketContent(char *basketStr, char *dest);
-    long handleRequestAsync(const char *requestJSONString);
-    char* pollRequest(long requestId, int *outStatus, int *outLen);
+    intptr_t handleRequest(const char *requestJSONString);   // returns basket pointer as intptr_t, 0 = failure
+    char* setNonBlocking(const char *requestJSONString, int nonBlocking);
+    void handleResponse(intptr_t basketHandle, char *dest, int capacity, int *outStatus, int *outLen);
 }
 
 // Global initialization flag
@@ -97,36 +97,46 @@ napi_value HandleRequest(napi_env env, napi_callback_info info) {
         envInitialized = 1;
     }
 
-    char *resultBuffer = nullptr;
     int actualRet = 0;
 
-    char *result = handleRequest(jsonStr, &actualRet);
-
+    // Pin blocking mode: handleRequest picks the mode from "non-blocking"
+    char *blockingJson = setNonBlocking(jsonStr, 0);
     free(jsonStr);
+
+    char *result = nullptr;
+    int resultStatus = 0;
+    if (blockingJson != nullptr) {
+        const intptr_t handle = handleRequest(blockingJson);
+        free(blockingJson);
+        if (handle != 0) {
+            int capacity = 1024 * 1024;
+            result = (char *)malloc(capacity);
+            if (result != nullptr) {
+                handleResponse(handle, result, capacity, &resultStatus, &actualRet);
+                if (resultStatus == 2) {
+                    // response bigger than the buffer: grow and re-collect
+                    char *bigger = (char *)realloc(result, (size_t)actualRet + 1);
+                    if (bigger != nullptr) {
+                        result = bigger;
+                        capacity = actualRet + 1;
+                        handleResponse(handle, result, capacity, &resultStatus, &actualRet);
+                    }
+                }
+            }
+        }
+    }
 
     // Create result object
     napi_value resultObj;
     napi_create_object(env, &resultObj);
 
-    if (result != nullptr && actualRet > 0) {
-        // Allocate exact buffer and get content (getBasketContent frees result)
-        resultBuffer = (char *)malloc(actualRet + 1);
-        if (!resultBuffer) {
-            free(result);
-            napi_throw_error(env, "ERR_NO_MEMORY", "Memory allocation failed");
-            return nullptr;
-        }
-        getBasketContent(result, resultBuffer);
-        resultBuffer[actualRet] = '\0';
-
+    if (resultStatus == 1 && result != nullptr && actualRet > 0) {
         // Success case
         napi_value dataValue;
-
-        napi_create_string_utf8(env, resultBuffer, (size_t)actualRet, &dataValue);
+        napi_create_string_utf8(env, result, (size_t)actualRet, &dataValue);
         napi_set_named_property(env, resultObj, "data", dataValue);
-
-        free(resultBuffer);
     }
+    free(result);
 
     return resultObj;
 }
@@ -150,7 +160,39 @@ struct AsyncRequest {
 // Runs on a libuv worker thread: MUST NOT touch napi_env / V8.
 static void ExecuteRequest(napi_env env, void *data) {
     AsyncRequest *req = (AsyncRequest *)data;
-    req->result = handleRequest(req->jsonStr, &req->resultLen);
+    // Pin blocking mode: handleRequest picks the mode from "non-blocking"
+    char *blockingJson = setNonBlocking(req->jsonStr, 0);
+    if (blockingJson == nullptr) {
+        return;
+    }
+    const intptr_t handle = handleRequest(blockingJson);
+    free(blockingJson);
+    if (handle == 0) {
+        return;
+    }
+
+    int capacity = 1024 * 1024;
+    char *buffer = (char *)malloc(capacity);
+    if (buffer == nullptr) {
+        return;
+    }
+    int status = 0;
+    handleResponse(handle, buffer, capacity, &status, &req->resultLen);
+    if (status == 2) {
+        // response bigger than the buffer: grow and re-collect
+        char *bigger = (char *)realloc(buffer, (size_t)req->resultLen + 1);
+        if (bigger != nullptr) {
+            buffer = bigger;
+            capacity = req->resultLen + 1;
+            handleResponse(handle, buffer, capacity, &status, &req->resultLen);
+        }
+    }
+    if (status == 1) {
+        req->result = buffer;
+    } else {
+        req->resultLen = 0;
+        free(buffer);
+    }
 }
 
 // Runs back on the JS thread once ExecuteRequest returns.
@@ -161,18 +203,9 @@ static void CompleteRequest(napi_env env, napi_status status, void *data) {
     napi_create_object(env, &resultObj);
 
     if (req->result != nullptr && req->resultLen > 0) {
-        char *resultBuffer = (char *)malloc(req->resultLen + 1);
-        if (resultBuffer) {
-            getBasketContent(req->result, resultBuffer); // frees req->result
-            resultBuffer[req->resultLen] = '\0';
-
-            napi_value dataValue;
-            napi_create_string_utf8(env, resultBuffer, (size_t)req->resultLen, &dataValue);
-            napi_set_named_property(env, resultObj, "data", dataValue);
-            free(resultBuffer);
-        } else if (req->result) {
-            free(req->result);
-        }
+        napi_value dataValue;
+        napi_create_string_utf8(env, req->result, (size_t)req->resultLen, &dataValue);
+        napi_set_named_property(env, resultObj, "data", dataValue);
     }
 
     // handleRequest embeds request-level errors in the JSON payload, mirroring
@@ -181,6 +214,7 @@ static void CompleteRequest(napi_env env, napi_status status, void *data) {
 
     napi_delete_async_work(env, req->work);
     free(req->jsonStr);
+    free(req->result);
     free(req);
 }
 
@@ -267,11 +301,12 @@ napi_value HandleRequestAsync(napi_env env, napi_callback_info info) {
 // ─── Non-blocking request (fire-and-forget start + poll) ───
 //
 // Unlike requestAsync (which runs the fully-blocking handleRequest on a libuv
-// worker), this path uses the C core's non-blocking surface: startRequest
-// sends HEADERS/DATA and returns immediately with a request id, and pollRequest
-// checks/collects the result later. Both are fast, non-blocking calls that run
-// on the JS thread, so the event loop never stalls and UV_THREADPOOL_SIZE is
-// irrelevant. The JS layer drives the poll loop with a timer.
+// worker), this path uses the C core's non-blocking surface: handleRequest on
+// a non-blocking request sends HEADERS/DATA and returns immediately with a
+// basket handle, and handleResponse checks/collects the result later when
+// passed that handle. Both are fast, non-blocking calls that run on the JS thread,
+// so the event loop never stalls and UV_THREADPOOL_SIZE is irrelevant. The JS
+// layer drives the poll loop with a timer.
 
 // Start a non-blocking request; returns { id } (id === 0 means start failed).
 napi_value HandleRequestNonBlocking(napi_env env, napi_callback_info info) {
@@ -317,8 +352,15 @@ napi_value HandleRequestNonBlocking(napi_env env, napi_callback_info info) {
         envInitialized = 1;
     }
 
-    long id = handleRequestAsync(jsonStr);
+    // Pin non-blocking mode; the basket handle is the id polled later.
+    char *asyncJson = setNonBlocking(jsonStr, 1);
     free(jsonStr);
+
+    intptr_t id = 0;
+    if (asyncJson != nullptr) {
+        id = handleRequest(asyncJson);
+        free(asyncJson);
+    }
 
     napi_value resultObj;
     napi_create_object(env, &resultObj);
@@ -347,9 +389,25 @@ napi_value PollRequest(napi_env env, napi_callback_info info) {
         return nullptr;
     }
 
+    int capacity = 1024 * 1024;
+    char *resultBuffer = (char *)malloc(capacity);
+    if (resultBuffer == nullptr) {
+        napi_throw_error(env, "ERR_NO_MEMORY", "Memory allocation failed");
+        return nullptr;
+    }
+
     int pollStatus = 0;
     int outLen = 0;
-    char *result = pollRequest((long)id, &pollStatus, &outLen);
+    handleResponse((intptr_t)id, resultBuffer, capacity, &pollStatus, &outLen);
+    if (pollStatus == 2) {
+        // response bigger than the buffer: grow and re-collect
+        char *bigger = (char *)realloc(resultBuffer, (size_t)outLen + 1);
+        if (bigger != nullptr) {
+            resultBuffer = bigger;
+            capacity = outLen + 1;
+            handleResponse((intptr_t)id, resultBuffer, capacity, &pollStatus, &outLen);
+        }
+    }
 
     napi_value resultObj;
     napi_create_object(env, &resultObj);
@@ -357,19 +415,12 @@ napi_value PollRequest(napi_env env, napi_callback_info info) {
     napi_create_int32(env, pollStatus, &statusValue);
     napi_set_named_property(env, resultObj, "status", statusValue);
 
-    if (result != nullptr && outLen > 0) {
-        char *resultBuffer = (char *)malloc(outLen + 1);
-        if (resultBuffer) {
-            getBasketContent(result, resultBuffer); // frees result
-            resultBuffer[outLen] = '\0';
-            napi_value dataValue;
-            napi_create_string_utf8(env, resultBuffer, (size_t)outLen, &dataValue);
-            napi_set_named_property(env, resultObj, "data", dataValue);
-            free(resultBuffer);
-        } else if (result) {
-            free(result);
-        }
+    if (pollStatus != 0 && outLen > 0) {
+        napi_value dataValue;
+        napi_create_string_utf8(env, resultBuffer, (size_t)outLen, &dataValue);
+        napi_set_named_property(env, resultObj, "data", dataValue);
     }
+    free(resultBuffer);
 
     return resultObj;
 }
