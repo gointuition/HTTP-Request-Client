@@ -27,6 +27,7 @@ extern void initialiseEnv(void);
 extern void cleanupEnv(void);
 extern intptr_t handleRequest(const char *requestJSONString);   /* returns basket pointer as intptr_t, 0 = failure */
 extern char* setNonBlocking(const char *requestJSONString, int nonBlocking);
+extern void freeJson(char *json);
 extern void handleResponse(intptr_t basketHandle, char *dest, int capacity, int *outStatus, int *outLen);
 
 /* Buffer size must match HttpClient.java BUFFER_SIZE (1 MB) */
@@ -64,7 +65,7 @@ JNIEXPORT jstring JNICALL Java_HttpClient_nativeRequest(JNIEnv *env, jclass cls,
     }
 
     const intptr_t handle = handleRequest(blockingJson);
-    free(blockingJson);
+    freeJson(blockingJson);
     if (handle == 0) {
         return NULL;
     }
@@ -137,7 +138,7 @@ JNIEXPORT jlong JNICALL Java_HttpClient_nativeStartRequest(JNIEnv *env, jclass c
     }
 
     const intptr_t handle = handleRequest(asyncJson);
-    free(asyncJson);
+    freeJson(asyncJson);
 
     return (jlong) handle;
 }

@@ -22,7 +22,7 @@ ffi.cdef("""
     void cleanupEnv(void);
     intptr_t handleRequest(const char *requestJSONString);
     char* setNonBlocking(const char *requestJSONString, int nonBlocking);
-    void free(void *ptr);
+    void freeJson(char *json);
     void handleResponse(intptr_t basketHandle, char *dest, int capacity, int *outStatus, int *outLen);
 """)
 
@@ -135,7 +135,7 @@ class HttpClient:
         # Run the blocking exchange, then collect the completed result into a
         # caller-owned buffer
         handle = self._lib.handleRequest(blocking_json)
-        self._lib.free(blocking_json)
+        self._lib.freeJson(blocking_json)
         if handle == 0:
             raise RuntimeError("handleRequest failed")
 
@@ -187,7 +187,7 @@ class HttpClient:
         if async_json == ffi.NULL:
             return 0
         handle = self._lib.handleRequest(async_json)
-        self._lib.free(async_json)
+        self._lib.freeJson(async_json)
         return handle
 
     def poll_request(self, request_id):

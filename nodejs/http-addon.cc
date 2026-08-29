@@ -12,6 +12,7 @@ extern "C" {
     void cleanupEnv(void);
     intptr_t handleRequest(const char *requestJSONString);   // returns basket pointer as intptr_t, 0 = failure
     char* setNonBlocking(const char *requestJSONString, int nonBlocking);
+    void freeJson(char *json);
     void handleResponse(intptr_t basketHandle, char *dest, int capacity, int *outStatus, int *outLen);
 }
 
@@ -107,7 +108,7 @@ napi_value HandleRequest(napi_env env, napi_callback_info info) {
     int resultStatus = 0;
     if (blockingJson != nullptr) {
         const intptr_t handle = handleRequest(blockingJson);
-        free(blockingJson);
+        freeJson(blockingJson);
         if (handle != 0) {
             int capacity = 1024 * 1024;
             result = (char *)malloc(capacity);
@@ -166,7 +167,7 @@ static void ExecuteRequest(napi_env env, void *data) {
         return;
     }
     const intptr_t handle = handleRequest(blockingJson);
-    free(blockingJson);
+    freeJson(blockingJson);
     if (handle == 0) {
         return;
     }
@@ -359,7 +360,7 @@ napi_value HandleRequestNonBlocking(napi_env env, napi_callback_info info) {
     intptr_t id = 0;
     if (asyncJson != nullptr) {
         id = handleRequest(asyncJson);
-        free(asyncJson);
+        freeJson(asyncJson);
     }
 
     napi_value resultObj;

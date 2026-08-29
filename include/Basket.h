@@ -187,8 +187,13 @@ typedef struct {
 Basket* buildBasket(const char *requestString);
 
 // Override the "non-blocking" field of a request JSON config. Returns a new
-// malloc'd JSON string (caller frees) or NULL when the input does not parse.
+// malloc'd JSON string (free it with freeJson()) or NULL when the input does
+// not parse.
 char* setNonBlocking(const char *requestJSONString, int nonBlocking);
+
+// Free a JSON string returned by setNonBlocking. Exported because binding
+// layers (e.g. cffi ABI mode) cannot resolve libc free() from the DLL.
+void freeJson(char *json);
 
 void freeBasket(Basket *basket);
 

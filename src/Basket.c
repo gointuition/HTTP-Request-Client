@@ -729,6 +729,13 @@ char* setNonBlocking(const char *requestJSONString, int nonBlocking) {
     return result;
 }
 
+// Free a JSON string returned by setNonBlocking (who allocates, frees).
+void freeJson(char *json) {
+    if (json != NULL) {
+        free(json);
+    }
+}
+
 void freeBasket(Basket *basket) {
     if (basket == NULL) {
         return;
