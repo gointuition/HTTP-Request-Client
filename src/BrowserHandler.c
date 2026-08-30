@@ -2,6 +2,7 @@
 // Created by Intuition on 25-8-16.
 //
 
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 
@@ -90,59 +91,54 @@ static const PseudoHeaderType CHROME_PSEUDO_ORDER[] = {
     PSEUDO_METHOD, PSEUDO_AUTHORITY, PSEUDO_SCHEME, PSEUDO_PATH
 };
 
+// Wire fingerprint shared by every desktop Chrome profile. The features that
+// moved per version (enableGreaseSigalgs / enableTrustAnchors) stay out of the
+// macro so each profile declares them explicitly.
+#define CHROME_FINGERPRINT_COMMON \
+    .settingsFrame = CHROME_SETTINGS_FRAME, \
+    .settingsFrameLen = sizeof(CHROME_SETTINGS_FRAME), \
+    .windowUpdateFrame = CHROME_WINDOW_UPDATE_FRAME, \
+    .windowUpdateFrameLen = sizeof(CHROME_WINDOW_UPDATE_FRAME), \
+    .headerValueMaxLength = 4096, \
+    .alpn = CHROME_ALPN, \
+    .alpnLen = sizeof(CHROME_ALPN), \
+    .cipherList = CHROME_CIPHERS, \
+    .groups = CHROME_GROUPS, \
+    .sigAlgs = CHROME_SIGALGS, \
+    .sigAlgsCount = sizeof(CHROME_SIGALGS) / sizeof(CHROME_SIGALGS[0]), \
+    .enableGrease = 1, \
+    .enablePermuteExtensions = 1, \
+    .enableEchGrease = 1, \
+    .enableAlps = 1, \
+    .certCompressionAlg = 2,   /* brotli */ \
+    .enableSessionTicket = 1, \
+    .enablePreSharedKey = 1, \
+    .enableHeadersPriority = 1, \
+    .pseudoHeaderOrder = CHROME_PSEUDO_ORDER
+
+// Chrome 150 and 151 share the same wire fingerprint.
 static const BrowserFingerprint CHROME_FINGERPRINT_150 = {
     .clientHelloId = "hellochrome_150",
-    .settingsFrame = CHROME_SETTINGS_FRAME,
-    .settingsFrameLen = sizeof(CHROME_SETTINGS_FRAME),
-    .windowUpdateFrame = CHROME_WINDOW_UPDATE_FRAME,
-    .windowUpdateFrameLen = sizeof(CHROME_WINDOW_UPDATE_FRAME),
-    .headerValueMaxLength = 4096,
-    .alpn = CHROME_ALPN,
-    .alpnLen = sizeof(CHROME_ALPN),
-    .cipherList = CHROME_CIPHERS,
-    .groups = CHROME_GROUPS,
-    .sigAlgs = CHROME_SIGALGS,
-    .sigAlgsCount = sizeof(CHROME_SIGALGS) / sizeof(CHROME_SIGALGS[0]),
-    .enableGrease = 1,
-    .enableGreaseSigalgs = 0,  // introduced in Chrome 152
-    .enablePermuteExtensions = 1,
-    .enableEchGrease = 1,
-    .enableAlps = 1,
-    .enableTrustAnchors = 0,   // introduced in Chrome 152
-    .certCompressionAlg = 2,   // brotli
-    .enableSessionTicket = 1,
-    .enablePreSharedKey = 1,
-    .enableHeadersPriority = 1,
-    .pseudoHeaderOrder = CHROME_PSEUDO_ORDER,
+    CHROME_FINGERPRINT_COMMON,
+    .enableGreaseSigalgs = 0,
+    .enableTrustAnchors = 0,
 };
 
-// Chrome 152 is identical to 150 except for two new ClientHello features:
-// a GREASE value at the head of signature_algorithms, and the trust_anchors
-// extension (51764/0xca34) carrying the MTC verifier's trust anchor IDs.
+static const BrowserFingerprint CHROME_FINGERPRINT_151 = {
+    .clientHelloId = "hellochrome_151",
+    CHROME_FINGERPRINT_COMMON,
+    .enableGreaseSigalgs = 0,
+    .enableTrustAnchors = 0,
+};
+
+// Chrome 152 adds two ClientHello features: a GREASE value at the head of
+// signature_algorithms, and the trust_anchors extension (51764/0xca34) carrying
+// the MTC verifier's trust anchor IDs.
 static const BrowserFingerprint CHROME_FINGERPRINT_152 = {
     .clientHelloId = "hellochrome_152",
-    .settingsFrame = CHROME_SETTINGS_FRAME,
-    .settingsFrameLen = sizeof(CHROME_SETTINGS_FRAME),
-    .windowUpdateFrame = CHROME_WINDOW_UPDATE_FRAME,
-    .windowUpdateFrameLen = sizeof(CHROME_WINDOW_UPDATE_FRAME),
-    .headerValueMaxLength = 4096,
-    .alpn = CHROME_ALPN,
-    .alpnLen = sizeof(CHROME_ALPN),
-    .cipherList = CHROME_CIPHERS,
-    .groups = CHROME_GROUPS,
-    .sigAlgs = CHROME_SIGALGS,
-    .sigAlgsCount = sizeof(CHROME_SIGALGS) / sizeof(CHROME_SIGALGS[0]),
-    .enableGrease = 1,
-    .enableGreaseSigalgs = 1,  // Chrome 152+ sends a GREASE value in signature_algorithms
-    .enablePermuteExtensions = 1,
-    .enableEchGrease = 1,
-    .enableAlps = 1,
-    .enableTrustAnchors = 1,   // Chrome 152+ sends trust_anchors (51764/0xca34)
-    .certCompressionAlg = 2,   // brotli
-    .enableSessionTicket = 1,
-    .enablePreSharedKey = 1,
-    .enableHeadersPriority = 1,
-    .pseudoHeaderOrder = CHROME_PSEUDO_ORDER,
+    CHROME_FINGERPRINT_COMMON,
+    .enableGreaseSigalgs = 1,
+    .enableTrustAnchors = 1,
 };
 
 // Alias the currently emulated Chrome version to the generic Chrome profile.
@@ -274,62 +270,9 @@ static const BrowserFingerprint CRIOS_FINGERPRINT_150 = {
 // Alias the currently emulated CriOS version to the generic CriOS profile.
 #define CRIOS_FINGERPRINT CRIOS_FINGERPRINT_150
 
-const BrowserFingerprint* getBrowserFingerprint(BrowserType type) {
-    switch (type) {
-        case BROWSER_CHROME:     return &CHROME_FINGERPRINT;
-        case BROWSER_CHROME_IOS: return &CRIOS_FINGERPRINT;
-        default:                 return &CHROME_FINGERPRINT;
-    }
-}
-
-const BrowserFingerprint* getBrowserFingerprintById(const char *clientHelloId) {
-    if (clientHelloId == NULL || clientHelloId[0] == '\0') {
-        return NULL;
-    }
-    // "_auto" pins the currently emulated version of a browser (the alias);
-    // an explicit "_<version>" id pins that specific profile.
-    if (strcasecmp(clientHelloId, "hellochrome_auto") == 0) {
-        return &CHROME_FINGERPRINT;
-    }
-    if (strcasecmp(clientHelloId, CHROME_FINGERPRINT_150.clientHelloId) == 0) {
-        return &CHROME_FINGERPRINT_150;
-    }
-    if (strcasecmp(clientHelloId, CHROME_FINGERPRINT_152.clientHelloId) == 0) {
-        return &CHROME_FINGERPRINT_152;
-    }
-    if (strcasecmp(clientHelloId, "hellocrios_auto") == 0) {
-        return &CRIOS_FINGERPRINT;
-    }
-    if (strcasecmp(clientHelloId, CRIOS_FINGERPRINT_150.clientHelloId) == 0) {
-        return &CRIOS_FINGERPRINT_150;
-    }
-    return NULL;
-}
-
-BrowserType browserTypeFromClientHelloId(const char *clientHelloId) {
-    if (getBrowserFingerprintById(clientHelloId) == NULL) {
-        return BROWSER_UNKNOWN;
-    }
-    if (strncasecmp(clientHelloId, "hellochrome", 11) == 0) {
-        return BROWSER_CHROME;
-    }
-    if (strncasecmp(clientHelloId, "hellocrios", 10) == 0) {
-        return BROWSER_CHROME_IOS;
-    }
-    return BROWSER_UNKNOWN;
-}
-
-int isChromeUA(const char *ua) {
-    const char *chromePos = strstr(ua, "Chrome");
-    if (chromePos == NULL) {
-        return 0;
-    }
-    // TODO Google Chrome only
-    if (strstr(ua, "Edge") || strstr(ua, "OPR")) {
-        return 0;
-    }
-    return 1;
-}
+// ===========================================================================
+// User-Agent detection
+// ===========================================================================
 
 BrowserType detectBrowseType(const char *ua) {
     if (strstr(ua, "Opr/") != NULL || strstr(ua, "Opera") != NULL) {
@@ -355,4 +298,179 @@ BrowserType detectBrowseType(const char *ua) {
     }
 
     return BROWSER_UNKNOWN;
+}
+
+int isChromeUA(const char *ua) {
+    const char *chromePos = strstr(ua, "Chrome");
+    if (chromePos == NULL) {
+        return 0;
+    }
+    // TODO Google Chrome only
+    if (strstr(ua, "Edge") || strstr(ua, "OPR")) {
+        return 0;
+    }
+    return 1;
+}
+
+// ===========================================================================
+// Profile lookup
+// ===========================================================================
+
+// Profiles grouped by browser family: a "_<version>" id pins one profile, while
+// an "_auto" id is resolved against the request User-Agent.
+typedef struct {
+    const char *autoId;
+    const char *uaVersionMarker;        // User-Agent token carrying the major version
+    const BrowserFingerprint * const *profiles;
+    size_t profilesCount;
+    const BrowserFingerprint *defaultProfile;
+} BrowserProfileFamily;
+
+static const BrowserFingerprint *const CHROME_PROFILES[] = {
+    &CHROME_FINGERPRINT_150,
+    &CHROME_FINGERPRINT_151,
+    &CHROME_FINGERPRINT_152,
+};
+
+static const BrowserProfileFamily CHROME_FAMILY = {
+    .autoId = "hellochrome_auto",
+    .uaVersionMarker = "Chrome/",
+    .profiles = CHROME_PROFILES,
+    .profilesCount = sizeof(CHROME_PROFILES) / sizeof(CHROME_PROFILES[0]),
+    .defaultProfile = &CHROME_FINGERPRINT,
+};
+
+static const BrowserFingerprint *const CRIOS_PROFILES[] = {
+    &CRIOS_FINGERPRINT_150,
+};
+
+static const BrowserProfileFamily CRIOS_FAMILY = {
+    .autoId = "hellocrios_auto",
+    .uaVersionMarker = "CriOS/",
+    .profiles = CRIOS_PROFILES,
+    .profilesCount = sizeof(CRIOS_PROFILES) / sizeof(CRIOS_PROFILES[0]),
+    .defaultProfile = &CRIOS_FINGERPRINT,
+};
+
+static const BrowserProfileFamily *const BROWSER_FAMILIES[] = {
+    &CHROME_FAMILY,
+    &CRIOS_FAMILY,
+};
+
+// Forward declarations, ordered by execution
+static long uaMajorVersion(const char *ua, const char *marker);
+static const BrowserFingerprint* findProfileByVersion(const BrowserProfileFamily *family, long version);
+static long profileVersion(const BrowserFingerprint *profile);
+static const BrowserFingerprint* findProfileById(const BrowserProfileFamily *family, const char *clientHelloId);
+
+// See BrowserHandler.h for the "_auto" vs "_<version>" resolution rules.
+const BrowserFingerprint* getBrowserFingerprintById(const char *clientHelloId, const char *ua) {
+    if (clientHelloId == NULL || clientHelloId[0] == '\0') {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < sizeof(BROWSER_FAMILIES) / sizeof(BROWSER_FAMILIES[0]); i++) {
+        const BrowserProfileFamily *family = BROWSER_FAMILIES[i];
+
+        if (strcasecmp(clientHelloId, family -> autoId) == 0) {
+            const long uaVersion = uaMajorVersion(ua, family -> uaVersionMarker);
+            const BrowserFingerprint *matched = findProfileByVersion(family, uaVersion);
+            return matched != NULL ? matched : family -> defaultProfile;
+        }
+
+        const BrowserFingerprint *pinned = findProfileById(family, clientHelloId);
+        if (pinned != NULL) {
+            return pinned;
+        }
+    }
+
+    return NULL;
+}
+
+BrowserType browserTypeFromClientHelloId(const char *clientHelloId) {
+    const BrowserFingerprint *fingerprint = getBrowserFingerprintById(clientHelloId, NULL);
+    if (fingerprint == NULL) {
+        return BROWSER_UNKNOWN;
+    }
+    if (strncasecmp(clientHelloId, "hellochrome", 11) == 0) {
+        return BROWSER_CHROME;
+    }
+    if (strncasecmp(clientHelloId, "hellocrios", 10) == 0) {
+        return BROWSER_CHROME_IOS;
+    }
+    return BROWSER_UNKNOWN;
+}
+
+const BrowserFingerprint* getBrowserFingerprint(BrowserType type) {
+    switch (type) {
+        case BROWSER_CHROME:     return &CHROME_FINGERPRINT;
+        case BROWSER_CHROME_IOS: return &CRIOS_FINGERPRINT;
+        default:                 return &CHROME_FINGERPRINT;
+    }
+}
+
+// Major version behind the marker in the User-Agent ("... Chrome/152.0.7387.99"
+// yields 152), or -1 when the User-Agent carries no matching version.
+static long uaMajorVersion(const char *ua, const char *marker) {
+    if (ua == NULL) {
+        return -1;
+    }
+
+    const char *version = strstr(ua, marker);
+    if (version == NULL) {
+        return -1;
+    }
+
+    version += strlen(marker);
+    char *end = NULL;
+    const long major = strtol(version, &end, 10);
+    if (end == version) {
+        return -1;
+    }
+
+    return major;
+}
+
+static const BrowserFingerprint* findProfileByVersion(const BrowserProfileFamily *family, long version) {
+    if (version < 0) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < family -> profilesCount; i++) {
+        const long pinnedVersion = profileVersion(family -> profiles[i]);
+        if (pinnedVersion == version) {
+            return family -> profiles[i];
+        }
+    }
+
+    return NULL;
+}
+
+// Trailing major version of a version-pinned profile id ("hellochrome_152" yields
+// 152), or -1 when the id carries no numeric version.
+static long profileVersion(const BrowserFingerprint *profile) {
+    const char *version = strrchr(profile -> clientHelloId, '_');
+    if (version == NULL) {
+        return -1;
+    }
+
+    version += 1;
+    char *end = NULL;
+    const long major = strtol(version, &end, 10);
+    if (end == version || *end != '\0') {
+        return -1;
+    }
+
+    return major;
+}
+
+static const BrowserFingerprint* findProfileById(const BrowserProfileFamily *family, const char *clientHelloId) {
+    for (size_t i = 0; i < family -> profilesCount; i++) {
+        const BrowserFingerprint *profile = family -> profiles[i];
+        if (strcasecmp(clientHelloId, profile -> clientHelloId) == 0) {
+            return profile;
+        }
+    }
+
+    return NULL;
 }

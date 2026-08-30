@@ -148,7 +148,8 @@ static void parseHeaders(Basket *basket, json_t *jsonRequest) {
         return;
     }
 
-    basket -> browserType = detectBrowseType(json_string_value(jsonUA));
+    const char *ua = json_string_value(jsonUA);
+    basket -> browserType = detectBrowseType(ua);
 
     const json_t *jsonSession = json_object_get(jsonRequest, "session");
     const char *clientHelloId = (jsonSession != NULL)
@@ -158,7 +159,7 @@ static void parseHeaders(Basket *basket, json_t *jsonRequest) {
         // an explicit id pins that exact version profile (e.g. hellochrome_150
         // vs hellochrome_152), so resolve the fingerprint directly instead of
         // folding it into a browser type.
-        const BrowserFingerprint *pinned = getBrowserFingerprintById(clientHelloId);
+        const BrowserFingerprint *pinned = getBrowserFingerprintById(clientHelloId, ua);
         if (pinned == NULL) {
             LOG("ERROR", "unsupported clientHelloId: %s", clientHelloId);
             basket -> error = ERR_REQUEST_UNSUPPORTED_CLIENTHELLOID;
@@ -178,6 +179,7 @@ static void parseHeaders(Basket *basket, json_t *jsonRequest) {
         if (fp != NULL && fp -> clientHelloId != NULL) {
             strncpy(basket -> clientHelloId, fp -> clientHelloId, sizeof(basket -> clientHelloId) - 1);
             basket -> clientHelloId[sizeof(basket -> clientHelloId) - 1] = '\0';
+            LOG("DEBUG", "clientHelloId in use: %s (requested: %s)", basket -> clientHelloId, clientHelloId != NULL ? clientHelloId : "none");
         }
     }
 

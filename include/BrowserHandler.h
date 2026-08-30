@@ -62,15 +62,20 @@ typedef struct {
     const PseudoHeaderType *pseudoHeaderOrder; // order of the 4 request pseudo-headers
 } BrowserFingerprint;
 
+// Detects the browser family from a user-agent (BROWSER_UNKNOWN when unsupported).
+BrowserType detectBrowseType(const char *ua);
+
 int isChromeUA(const char *ua);
 
-BrowserType detectBrowseType(const char *ua);
+// Resolves a clientHelloId to its fingerprint profile. An explicit "_<version>"
+// id pins that profile; an "_auto" id follows the browser major version declared
+// by `ua` when a profile exists for it, and falls back to the currently emulated
+// version otherwise. `ua` may be NULL. Returns NULL for an unknown id.
+const BrowserFingerprint* getBrowserFingerprintById(const char *clientHelloId, const char *ua);
+
+BrowserType browserTypeFromClientHelloId(const char *clientHelloId);
 
 // Returns the fingerprint profile for a browser type, or NULL if unsupported.
 const BrowserFingerprint* getBrowserFingerprint(BrowserType type);
-
-const BrowserFingerprint* getBrowserFingerprintById(const char *clientHelloId);
-
-BrowserType browserTypeFromClientHelloId(const char *clientHelloId);
 
 #endif //BROWSER_H

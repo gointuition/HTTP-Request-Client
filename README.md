@@ -337,13 +337,13 @@ Optional uTLS-style identifier that pins the TLS/HTTP/2 wire fingerprint to emul
 
 | clientHelloId | Emulated profile |
 |---------------|------------------|
-| `hellochrome_auto` | Desktop Chrome — currently emulated version |
+| `hellochrome_auto` | Desktop Chrome — version taken from the `User-Agent`, else currently emulated version |
 | `hellochrome_152` | Desktop Chrome 152 (version-pinned) |
 | `hellochrome_150` | Desktop Chrome 150 (version-pinned) |
-| `hellocrios_auto` | Chrome on iOS (CriOS) — currently emulated version |
+| `hellocrios_auto` | Chrome on iOS (CriOS) — version taken from the `User-Agent`, else currently emulated version |
 | `hellocrios_150` | Chrome on iOS (CriOS) 150 (version-pinned) |
 
-`_auto` always tracks the latest emulated version, while `_<version>` pins that specific profile. Matching is case-insensitive.
+`_auto` follows the browser major version declared by the request `User-Agent` when a profile exists for it (`hellochrome_auto` with `Chrome/150.0.0.0` resolves to `hellochrome_150`), and falls back to the latest emulated version when the `User-Agent` declares no known version. `_<version>` always pins that specific profile, ignoring the `User-Agent`. Matching is case-insensitive.
 
 ### `session.protocol`
 
