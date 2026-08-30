@@ -155,19 +155,26 @@ static void parseHeaders(Basket *basket, json_t *jsonRequest) {
         ? json_string_value(json_object_get(jsonSession, "clientHelloId"))
         : NULL;
     if (clientHelloId != NULL) {
-        const BrowserType selected = browserTypeFromClientHelloId(clientHelloId);
-        if (selected == BROWSER_UNKNOWN) {
+        // an explicit id pins that exact version profile (e.g. hellochrome_150
+        // vs hellochrome_152), so resolve the fingerprint directly instead of
+        // folding it into a browser type.
+        const BrowserFingerprint *pinned = getBrowserFingerprintById(clientHelloId);
+        if (pinned == NULL) {
             LOG("ERROR", "unsupported clientHelloId: %s", clientHelloId);
             basket -> error = ERR_REQUEST_UNSUPPORTED_CLIENTHELLOID;
         } else {
-            basket -> browserType = selected;
+            basket -> fingerprint = pinned;
+            basket -> browserType = browserTypeFromClientHelloId(clientHelloId);
         }
-    } else if (getBrowserFingerprint(basket -> browserType) == NULL) {
-        basket -> browserType = BROWSER_CHROME; // default: hellochrome_auto
+    } else {
+        if (getBrowserFingerprint(basket -> browserType) == NULL) {
+            basket -> browserType = BROWSER_CHROME; // default: hellochrome_auto
+        }
+        basket -> fingerprint = getBrowserFingerprint(basket -> browserType);
     }
 
     if (basket -> error.code == NULL) {
-        const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+        const BrowserFingerprint *fp = basket -> fingerprint;
         if (fp != NULL && fp -> clientHelloId != NULL) {
             strncpy(basket -> clientHelloId, fp -> clientHelloId, sizeof(basket -> clientHelloId) - 1);
             basket -> clientHelloId[sizeof(basket -> clientHelloId) - 1] = '\0';
@@ -305,6 +312,7 @@ void initBasket(Basket * basket) {
     basket -> method = NULL;
 
     basket -> browserType = BROWSER_UNKNOWN;
+    basket -> fingerprint = NULL;
     basket -> clientHelloId[0] = '\0';
 
     basket -> request.payload = NULL;
@@ -335,7 +343,7 @@ void initBasket(Basket * basket) {
 static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     size_t idx = 0;
 
-    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const BrowserFingerprint *fp = basket -> fingerprint;
     const int headerValueMaxLength = (fp != NULL) ? fp -> headerValueMaxLength : 4096;
 
     size_t cookieCount = 0;
@@ -432,7 +440,7 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
 static void buildHttp11Headers(Basket *basket, json_t *jsonHeaders) {
     size_t idx = 0;
 
-    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const BrowserFingerprint *fp = basket -> fingerprint;
     const int headerValueMaxLength = (fp != NULL) ? fp -> headerValueMaxLength : 4096;
 
     size_t cookieCount = 0;

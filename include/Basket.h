@@ -176,6 +176,7 @@ typedef struct {
     int         sessionExpirationInMilliseconds;
     atomic_uint streamId;   // stream id for this request
     BrowserType browserType;
+    const BrowserFingerprint *fingerprint;  // resolved wire profile (version-pinned when clientHelloId is given)
     char        clientHelloId[64];
     Proxy       proxy;
     Request     request;

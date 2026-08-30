@@ -146,7 +146,7 @@ int establishTransport(Basket *basket, SSL *ssl) {
         return -1;
     }
 
-    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const BrowserFingerprint *fp = basket -> fingerprint;
     if (fp == NULL) {
         // TODO
         LOG("ERROR", "unsupported user-agent");
@@ -257,7 +257,7 @@ static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t 
 
     // TODO other browsers
     const int hasPayload = (basket -> request.payload != NULL) ? 1 : 0;
-    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const BrowserFingerprint *fp = basket -> fingerprint;
     const int includePriority = (fp != NULL) ? fp -> enableHeadersPriority : 0;
     size_t totalPayloadLen = buildHeadersFrameBuffer(buffer, bufferSize, hasPayload, hpackBuffer,
                                                      hpackPayloadLen, basket -> streamId, includePriority);

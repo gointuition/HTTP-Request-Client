@@ -10,7 +10,7 @@ export interface HttpRequestConfig {
     headers?: Record<string, string>;
     session?: {
         expirationInMilliseconds?: number;
-        // uTLS fingerprint profile: hellochrome_auto | hellochrome_150 | hellocrios_auto | hellocrios_150
+        // uTLS fingerprint profile: hellochrome_auto | hellochrome_152 | hellochrome_150 | hellocrios_auto | hellocrios_150
         clientHelloId?: string;
         // force the session protocol: "h2" (default) or "http/1.1" (downgrade)
         protocol?: string;

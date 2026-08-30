@@ -36,10 +36,15 @@ SSL_CTX* createSSLContext(Basket *basket) {
 
     // GREASE (RFC 8701) can only be toggled at the SSL_CTX level, so gate it
     // here based on the browser fingerprint (Chrome uses it, Safari/CriOS does not).
-    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    // The signature_algorithms GREASE value has its own switch (off by default
+    // upstream); Chrome 152+ sends it, so gate it behind a separate profile flag.
+    const BrowserFingerprint *fp = basket -> fingerprint;
     if (fp != NULL && fp -> enableGrease) {
         SSL_CTX_set_grease_enabled(ctx, 1);
 //        SSL_CTX_set_strict_cipher_list(ctx, fp -> cipherList);
+    }
+    if (fp != NULL && fp -> enableGreaseSigalgs) {
+        SSL_CTX_set_grease_sigalgs_enabled(ctx, 1);
     }
 
     // enable client-side session cache and register callback for TLS 1.3 session resumption (pre_shared_key)
@@ -69,7 +74,7 @@ SSL* createSSL(Basket *basket, SSL_CTX *ctx, int sockfd) {
 }
 
 int configureSSLSettings(Basket *basket, SSL *ssl) {
-    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const BrowserFingerprint *fp = basket -> fingerprint;
     if (fp == NULL) {
         // TODO
         LOG("ERROR", "unsupported user-agent");
@@ -87,6 +92,42 @@ static const uint8_t emptySCTRequest[] = { 0x00, 0x00 };
 static const uint8_t alpsSettings[] = {
     0x68, 0x32, // h2
     // 0x00, 0x00 // empty payload
+};
+
+// trust_anchors (51764 / 0xca34, draft-ietf-tls-trust-anchor-ids) extension
+// content captured from Chrome 152: a wire-format list of 28 trust anchor IDs
+// (u8 length-prefixed), which Chrome uses to advertise the trust anchors its
+// Merkle Tree Certificate (MTC, draft-davidben-tls-merkle-tree-certs) verifier
+// accepts. Refresh from a fresh capture when Chrome updates its tree heads.
+static const uint8_t chromeTrustAnchorIds[] = {
+    0x05, 0x82, 0xdf, 0x13, 0x02, 0x12,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x0a,
+    0x04, 0xd6, 0x79, 0x09, 0x06,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x07,
+    0x04, 0xd6, 0x79, 0x09, 0x04,
+    0x04, 0xd6, 0x79, 0x09, 0x01,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x0c,
+    0x04, 0xd6, 0x79, 0x09, 0x0f,
+    0x04, 0xd6, 0x79, 0x09, 0x0a,
+    0x04, 0xd6, 0x79, 0x09, 0x0d,
+    0x05, 0x82, 0xdf, 0x13, 0x02, 0x13,
+    0x05, 0x82, 0xdf, 0x13, 0x02, 0x06,
+    0x05, 0x82, 0xdf, 0x13, 0x02, 0x14,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x13,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x09,
+    0x04, 0xd6, 0x79, 0x09, 0x07,
+    0x05, 0x82, 0xdf, 0x13, 0x02, 0x0d,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x12,
+    0x04, 0xd6, 0x79, 0x09, 0x08,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x08,
+    0x04, 0xd6, 0x79, 0x09, 0x05,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x0b,
+    0x05, 0x82, 0xdf, 0x13, 0x02, 0x01,
+    0x05, 0x82, 0xdf, 0x13, 0x02, 0x0e,
+    0x04, 0xd6, 0x79, 0x09, 0x0b,
+    0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x0d,
+    0x05, 0x82, 0xdf, 0x13, 0x02, 0x0f,
+    0x04, 0xd6, 0x79, 0x09, 0x0c,
 };
 
 // Applies a browser's TLS ClientHello fingerprint. All browser-specific data
@@ -130,6 +171,11 @@ static void applyTlsFingerprint(const char *hostname, SSL *ssl, const BrowserFin
     // add application settings (ALPS, Chrome only)
     if (fp -> enableAlps) {
         SSL_add_application_settings(ssl, alpsSettings, sizeof(alpsSettings), NULL, 0);
+    }
+    // advertise supported trust anchors (trust_anchors 51764/0xca34); Chrome
+    // 152+ sends this to guide server certificate selection for MTC
+    if (fp -> enableTrustAnchors) {
+        SSL_set1_requested_trust_anchors(ssl, chromeTrustAnchorIds, sizeof(chromeTrustAnchorIds));
     }
     // set supported groups
     SSL_set1_groups_list(ssl, fp -> groups);

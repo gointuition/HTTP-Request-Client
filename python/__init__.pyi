@@ -27,7 +27,7 @@ class ProxyConfig(TypedDict):
 
 class SessionConfig(TypedDict, total=False):
     expirationInMilliseconds: int
-    # uTLS fingerprint profile: hellochrome_auto | hellochrome_150 | hellocrios_auto | hellocrios_150
+    # uTLS fingerprint profile: hellochrome_auto | hellochrome_152 | hellochrome_150 | hellocrios_auto | hellocrios_150
     clientHelloId: str
 
 

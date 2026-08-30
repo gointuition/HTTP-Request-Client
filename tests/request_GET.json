@@ -3,8 +3,8 @@
 //  "url": "https://httpbin.org/get",
 //  "url": "https://httpbin.org/brotli",
 //  "url": "https://httpbin.org/deflate",
-  "url": "https://www.cloudflare.com/cdn-cgi/trace",
-//  "url": "https://tls.peet.ws/api/all",
+//  "url": "https://www.cloudflare.com/cdn-cgi/trace",
+  "url": "https://tls.peet.ws/api/all",
   "connectTimeoutInMilliseconds": 3000,
   "responseReadingTimeoutInMilliseconds": 30000,
 //  "decompress": "gzip, deflate, br, zstd",
@@ -34,12 +34,14 @@
     "cookie": "a=123; b=456",
     "X-HeaderOrderKey": "host,user-agent,sec-ch-ua,sec-ch-ua-mobile,accept,sec-fetch-site,sec-fetch-mode,sec-fetch-dest,accept-encoding,accept-language,priority,cookie"
   },
-//  "proxy": {
-//    "scheme": "https",
+  "proxy": {
+    "scheme": "https",
 //    "host": "127.0.0.1",
 //    "port": "24801",
-//    "authorization": "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
-//  },
+//    "authorization": "Basic dXNlcm5hbWU6cGFzc3dvcmQ=",
+    "host": "10.5.0.10",
+    "port": "23692"
+  },
   "session": {
     // "hellochrome_150", "hellocrios_auto", ...
     "clientHelloId": "hellochrome_auto",

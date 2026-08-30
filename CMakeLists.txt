@@ -127,7 +127,7 @@ endfunction()
 ########## Pinned third-party revisions ####################
 # Fixed source versions for reproducible builds. Bump these deliberately (and
 # re-verify the local patches afterwards) instead of tracking upstream HEAD.
-set(BORINGSSL_GIT_REF 9134af991b3440140812a0c1bd466cd92b9e19ec) # 0.20250818.0 series
+set(BORINGSSL_GIT_REF 572a4c68475d284b34675f45ddbb9c158ef3c2ae) # Chrome 152 (152.0.7977) pinned revision
 set(BROTLI_GIT_REF    3efb30f96ba50389c4a2fcd9f884b7dbfbadebae) # v1.1.0 (bcr.0 + 6)
 set(ZLIB_GIT_REF      v1.3.1)                                   # latest stable release
 set(JANSSON_GIT_REF   v2.15.1)                                  # v2.15.1 series

@@ -50,9 +50,11 @@ typedef struct {
     const uint16_t *sigAlgs;
     size_t sigAlgsCount;
     int enableGrease;            // TLS GREASE (RFC 8701), Chrome-only
+    int enableGreaseSigalgs;     // Chrome 152+ GREASE value in signature_algorithms
     int enablePermuteExtensions; // ClientHello extension permutation, Chrome-only
     int enableEchGrease;         // Chrome-only ECH GREASE
     int enableAlps;             // Chrome-only application settings (ALPS)
+    int enableTrustAnchors;     // Chrome 152+ trust_anchors (51764/0xca34) ClientHello extension
     int certCompressionAlg;     // compress_certificate (27) algorithm: 0=off, 1=zlib, 2=brotli
     int enableSessionTicket;    // session_ticket extension (35); iOS Chrome omits it
     int enablePreSharedKey;     // offer TLS 1.3 resumption (pre_shared_key, 41); iOS Chrome omits it

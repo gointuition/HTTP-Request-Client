@@ -338,6 +338,7 @@ Optional uTLS-style identifier that pins the TLS/HTTP/2 wire fingerprint to emul
 | clientHelloId | Emulated profile |
 |---------------|------------------|
 | `hellochrome_auto` | Desktop Chrome — currently emulated version |
+| `hellochrome_152` | Desktop Chrome 152 (version-pinned) |
 | `hellochrome_150` | Desktop Chrome 150 (version-pinned) |
 | `hellocrios_auto` | Chrome on iOS (CriOS) — currently emulated version |
 | `hellocrios_150` | Chrome on iOS (CriOS) 150 (version-pinned) |

@@ -104,9 +104,40 @@ static const BrowserFingerprint CHROME_FINGERPRINT_150 = {
     .sigAlgs = CHROME_SIGALGS,
     .sigAlgsCount = sizeof(CHROME_SIGALGS) / sizeof(CHROME_SIGALGS[0]),
     .enableGrease = 1,
+    .enableGreaseSigalgs = 0,  // introduced in Chrome 152
     .enablePermuteExtensions = 1,
     .enableEchGrease = 1,
     .enableAlps = 1,
+    .enableTrustAnchors = 0,   // introduced in Chrome 152
+    .certCompressionAlg = 2,   // brotli
+    .enableSessionTicket = 1,
+    .enablePreSharedKey = 1,
+    .enableHeadersPriority = 1,
+    .pseudoHeaderOrder = CHROME_PSEUDO_ORDER,
+};
+
+// Chrome 152 is identical to 150 except for two new ClientHello features:
+// a GREASE value at the head of signature_algorithms, and the trust_anchors
+// extension (51764/0xca34) carrying the MTC verifier's trust anchor IDs.
+static const BrowserFingerprint CHROME_FINGERPRINT_152 = {
+    .clientHelloId = "hellochrome_152",
+    .settingsFrame = CHROME_SETTINGS_FRAME,
+    .settingsFrameLen = sizeof(CHROME_SETTINGS_FRAME),
+    .windowUpdateFrame = CHROME_WINDOW_UPDATE_FRAME,
+    .windowUpdateFrameLen = sizeof(CHROME_WINDOW_UPDATE_FRAME),
+    .headerValueMaxLength = 4096,
+    .alpn = CHROME_ALPN,
+    .alpnLen = sizeof(CHROME_ALPN),
+    .cipherList = CHROME_CIPHERS,
+    .groups = CHROME_GROUPS,
+    .sigAlgs = CHROME_SIGALGS,
+    .sigAlgsCount = sizeof(CHROME_SIGALGS) / sizeof(CHROME_SIGALGS[0]),
+    .enableGrease = 1,
+    .enableGreaseSigalgs = 1,  // Chrome 152+ sends a GREASE value in signature_algorithms
+    .enablePermuteExtensions = 1,
+    .enableEchGrease = 1,
+    .enableAlps = 1,
+    .enableTrustAnchors = 1,   // Chrome 152+ sends trust_anchors (51764/0xca34)
     .certCompressionAlg = 2,   // brotli
     .enableSessionTicket = 1,
     .enablePreSharedKey = 1,
@@ -115,7 +146,7 @@ static const BrowserFingerprint CHROME_FINGERPRINT_150 = {
 };
 
 // Alias the currently emulated Chrome version to the generic Chrome profile.
-#define CHROME_FINGERPRINT CHROME_FINGERPRINT_150
+#define CHROME_FINGERPRINT CHROME_FINGERPRINT_152
 
 // ===========================================================================
 // CriOS (Chrome on iOS) fingerprint.
@@ -262,6 +293,9 @@ const BrowserFingerprint* getBrowserFingerprintById(const char *clientHelloId) {
     }
     if (strcasecmp(clientHelloId, CHROME_FINGERPRINT_150.clientHelloId) == 0) {
         return &CHROME_FINGERPRINT_150;
+    }
+    if (strcasecmp(clientHelloId, CHROME_FINGERPRINT_152.clientHelloId) == 0) {
+        return &CHROME_FINGERPRINT_152;
     }
     if (strcasecmp(clientHelloId, "hellocrios_auto") == 0) {
         return &CRIOS_FINGERPRINT;

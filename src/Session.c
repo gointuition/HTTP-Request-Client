@@ -444,7 +444,7 @@ static void createSession(Basket *basket) {
     // Only offer it when the browser profile advertises pre_shared_key (41); iOS Chrome (CriOS) omits
     // the extension, so skipping SSL_set_session keeps it out of the ClientHello. psk_key_exchange_modes
     // (45) is unaffected as BoringSSL sends it independently for any TLS 1.3-capable client.
-    const BrowserFingerprint *fp = getBrowserFingerprint(basket -> browserType);
+    const BrowserFingerprint *fp = basket -> fingerprint;
     if (fp != NULL && fp -> enablePreSharedKey) {
         SSL_SESSION *cachedSession = lookupTLSSession(basket -> request.urlComponents.host,
                                                       basket -> request.urlComponents.port,
