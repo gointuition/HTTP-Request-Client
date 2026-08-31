@@ -37,6 +37,7 @@
           }
         }],
         ["OS=='linux'", {
+          "cflags_cc!": ["-std=gnu++20"],
           "cflags_cc": ["-std=c++17"],
           "ldflags": [
             "-Wl,-rpath,\$$ORIGIN/../../../lib/shared",

@@ -2,8 +2,10 @@
 // Created by Intuition on 25-7-14.
 //
 
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #include <zlib.h>
 
 #include "SSLHandler.h"
@@ -15,6 +17,7 @@
 #include "brotli/decode.h"
 #include "brotli/encode.h"
 
+static void prepareTrustAnchors(SSL *ssl);
 static void applyTlsFingerprint(const char *hostname, SSL *ssl, const BrowserFingerprint *fp);
 
 int zlibCompressCb(SSL *ssl, CBB *out, const uint8_t *in, size_t inLen);
@@ -98,7 +101,9 @@ static const uint8_t alpsSettings[] = {
 // content captured from Chrome 152: a wire-format list of 28 trust anchor IDs
 // (u8 length-prefixed), which Chrome uses to advertise the trust anchors its
 // Merkle Tree Certificate (MTC, draft-davidben-tls-merkle-tree-certs) verifier
-// accepts. Refresh from a fresh capture when Chrome updates its tree heads.
+// Chrome 152+ sends this to guide server certificate selection for MTC.
+// Each Chrome instance receives landmarks at different times, so the
+// ordering varies per machine. Shuffle per connection to match.
 static const uint8_t chromeTrustAnchorIds[] = {
     0x05, 0x82, 0xdf, 0x13, 0x02, 0x12,
     0x08, 0x83, 0x9a, 0x64, 0x8c, 0x9b, 0x2d, 0x01, 0x0a,
@@ -172,10 +177,9 @@ static void applyTlsFingerprint(const char *hostname, SSL *ssl, const BrowserFin
     if (fp -> enableAlps) {
         SSL_add_application_settings(ssl, alpsSettings, sizeof(alpsSettings), NULL, 0);
     }
-    // advertise supported trust anchors (trust_anchors 51764/0xca34); Chrome
-    // 152+ sends this to guide server certificate selection for MTC
+    // advertise supported trust anchors (trust_anchors 51764/0xca34)
     if (fp -> enableTrustAnchors) {
-        SSL_set1_requested_trust_anchors(ssl, chromeTrustAnchorIds, sizeof(chromeTrustAnchorIds));
+        prepareTrustAnchors(ssl);
     }
     // set supported groups
     SSL_set1_groups_list(ssl, fp -> groups);
@@ -188,6 +192,40 @@ static void applyTlsFingerprint(const char *hostname, SSL *ssl, const BrowserFin
     } else if (fp -> certCompressionAlg == 1) {
         SSL_CTX_add_cert_compression_alg(SSL_get_SSL_CTX(ssl), 1, zlibCompressCb, zlibDecompressCb);     // zlib (1)
     }
+}
+
+// Parse the length-prefixed trust anchor entries, Fisher-Yates shuffle them,
+// and set the result on the SSL object.
+static void prepareTrustAnchors(SSL *ssl) {
+    static int seeded = 0;
+    if (!seeded) {
+        srand((unsigned int)time(NULL));
+        seeded = 1;
+    }
+    typedef struct { const uint8_t *data; uint8_t len; } TAEntry;
+    TAEntry entries[28];
+    size_t count = 0;
+    size_t offset = 0;
+    while (offset < sizeof(chromeTrustAnchorIds)) {
+        uint8_t len = chromeTrustAnchorIds[offset];
+        entries[count].data = &chromeTrustAnchorIds[offset];
+        entries[count].len  = 1 + len;
+        count++;
+        offset += 1 + len;
+    }
+    for (size_t i = count - 1; i > 0; i--) {
+        size_t j = (size_t)rand() % (i + 1);
+        TAEntry tmp = entries[i];
+        entries[i]  = entries[j];
+        entries[j]  = tmp;
+    }
+    uint8_t shuffled[sizeof(chromeTrustAnchorIds)];
+    size_t pos = 0;
+    for (size_t i = 0; i < count; i++) {
+        memcpy(shuffled + pos, entries[i].data, entries[i].len);
+        pos += entries[i].len;
+    }
+    SSL_set1_requested_trust_anchors(ssl, shuffled, pos);
 }
 
 int zlibCompressCb(SSL *ssl, CBB *out, const uint8_t *in, size_t inLen) {
