@@ -23,6 +23,7 @@ static void parseLog(const json_t *jsonRequest);
 static void parseUrlField(Basket *basket, const json_t *jsonRequest);
 static void parseMethod(Basket *basket, const json_t *jsonRequest);
 static void parseHeaders(Basket *basket, json_t *jsonRequest);
+static const json_t *jsonHeaderGet(const json_t *jsonHeaders, const char *name);
 static void parsePayload(Basket *basket, const json_t *jsonRequest);
 static void parseOptions(Basket *basket, const json_t *jsonRequest);
 static void parseProxy(Basket *basket, const json_t *jsonRequest);
@@ -133,6 +134,24 @@ static void parseMethod(Basket *basket, const json_t *jsonRequest) {
     }
 }
 
+// Header field names are case-insensitive (RFC 9110 5.1), so the "headers"
+// object of a request may use any casing ("User-Agent", "cookie", ...).
+// Returns the first matching value, or NULL when the header is absent.
+static const json_t *jsonHeaderGet(const json_t *jsonHeaders, const char *name) {
+    if (jsonHeaders == NULL || !json_is_object(jsonHeaders) || name == NULL) {
+        return NULL;
+    }
+
+    const char *key;
+    json_t *value;
+    json_object_foreach((json_t *) jsonHeaders, key, value) {
+        if (strcasecmp(key, name) == 0) {
+            return value;
+        }
+    }
+    return NULL;
+}
+
 static void parseHeaders(Basket *basket, json_t *jsonRequest) {
     json_t *jsonHeaders = json_object_get(jsonRequest, "headers");
     if (jsonHeaders == NULL) {
@@ -141,7 +160,7 @@ static void parseHeaders(Basket *basket, json_t *jsonRequest) {
         return;
     }
 
-    const json_t *jsonUA = json_object_get(jsonHeaders, "user-agent");
+    const json_t *jsonUA = jsonHeaderGet(jsonHeaders, "user-agent");
     if (jsonUA == NULL) {
         LOG("ERROR", "missing header user-agent");
         basket -> error = ERR_REQUEST_PARSING_USERAGENT_FAILED;
@@ -215,16 +234,8 @@ static void parsePayload(Basket *basket, const json_t *jsonRequest) {
 
         // content length is supplied by caller, verify it against the actual payload byte length.
         const json_t *jsonHeaders = json_object_get(jsonRequest, "headers");
-        if (jsonHeaders != NULL && json_is_object(jsonHeaders)) {
-            const char *expectedLen = NULL;
-            const char *key;
-            json_t *value;
-            json_object_foreach((json_t *) jsonHeaders, key, value) {
-                if (strcasecmp(key, "content-length") == 0) {
-                    expectedLen = json_string_value(value);
-                    break;
-                }
-            }
+        if (jsonHeaders != NULL) {
+            const char *expectedLen = json_string_value(jsonHeaderGet(jsonHeaders, "content-length"));
             if (expectedLen != NULL) {
                 long expected = strtol(expectedLen, NULL, 10);
                 if (expected < 0 || (size_t)expected != actualLen) {
@@ -349,7 +360,7 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     const int headerValueMaxLength = (fp != NULL) ? fp -> headerValueMaxLength : 4096;
 
     size_t cookieCount = 0;
-    const json_t *jsonCookie = json_object_get(jsonHeaders, "cookie");
+    const json_t *jsonCookie = jsonHeaderGet(jsonHeaders, "cookie");
     if (jsonCookie != NULL) {
         cookieCount = processCookies(NULL, 0, json_string_value(jsonCookie), 1, headerValueMaxLength);
     }
@@ -359,10 +370,10 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
     basket -> request.headers = (RequestHeader *) malloc(sizeof(RequestHeader) * (json_object_size(jsonHeaders) + 1 + 4 + cookieCount));
 
     int containPseudoHeaders = 1;
-    const json_t *pseudoMethod = json_object_get(jsonHeaders, ":method");
-    const json_t *pseudoAuthority = json_object_get(jsonHeaders, ":authority");
-    const json_t *pseudoScheme = json_object_get(jsonHeaders, ":scheme");
-    const json_t *pseudoPath = json_object_get(jsonHeaders, ":path");
+    const json_t *pseudoMethod = jsonHeaderGet(jsonHeaders, ":method");
+    const json_t *pseudoAuthority = jsonHeaderGet(jsonHeaders, ":authority");
+    const json_t *pseudoScheme = jsonHeaderGet(jsonHeaders, ":scheme");
+    const json_t *pseudoPath = jsonHeaderGet(jsonHeaders, ":path");
     if (pseudoMethod == NULL || pseudoAuthority == NULL || pseudoScheme == NULL || pseudoPath == NULL) {
         containPseudoHeaders = 0;
 
@@ -446,7 +457,7 @@ static void buildHttp11Headers(Basket *basket, json_t *jsonHeaders) {
     const int headerValueMaxLength = (fp != NULL) ? fp -> headerValueMaxLength : 4096;
 
     size_t cookieCount = 0;
-    const json_t *jsonCookie = json_object_get(jsonHeaders, "cookie");
+    const json_t *jsonCookie = jsonHeaderGet(jsonHeaders, "cookie");
     if (jsonCookie != NULL) {
         cookieCount = processCookies(NULL, 0, json_string_value(jsonCookie), 1, headerValueMaxLength);
     }
@@ -454,7 +465,7 @@ static void buildHttp11Headers(Basket *basket, json_t *jsonHeaders) {
     // +1: content-length ?
     basket -> request.headers = (RequestHeader *) malloc(sizeof(RequestHeader) * (json_object_size(jsonHeaders) + 1 + cookieCount));
 
-    const json_t *pseudoAuthority = json_object_get(jsonHeaders, ":authority");
+    const json_t *pseudoAuthority = jsonHeaderGet(jsonHeaders, ":authority");
 
     basket -> request.containsContentLength = 0;
 
