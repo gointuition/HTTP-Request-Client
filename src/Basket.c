@@ -431,7 +431,6 @@ static void buildHttp2Headers(Basket *basket, json_t *jsonHeaders) {
                 && strcasecmp(":scheme", key) != 0
                 && strcasecmp(":path", key) != 0
                 && strcasecmp("host", key) != 0
-                && strcasecmp("connection", key) != 0
             ) {
                 if (value != NULL) {
                     if (strcasecmp("cookie", key) == 0) {
@@ -572,7 +571,8 @@ static void reorderHeadersByOrderKey(Basket *basket) {
     // Error if any real (non-pseudo, non-order-key) header is missing from the
     // ordered list.
     for (size_t i = 0; i < n; i++) {
-        if (req -> headers[i].isPseudo || (int) i == orderIdx) {
+        if (req -> headers[i].isPseudo || (int) i == orderIdx ||
+            strcasecmp(req -> headers[i].name, "connection") == 0) {
             continue;
         }
         int listed = 0;
@@ -619,6 +619,16 @@ static void reorderHeadersByOrderKey(Basket *basket) {
                 matched[i] = 1;
                 break;
             }
+        }
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        if (req -> headers[i].isPseudo || (int) i == orderIdx || matched[i]) {
+            continue;
+        }
+        if (strcasecmp(req -> headers[i].name, "connection") == 0) {
+            ordered[out++] = req -> headers[i];
+            matched[i] = 1;
         }
     }
 

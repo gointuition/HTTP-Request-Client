@@ -242,6 +242,10 @@ static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t 
     unsigned char *hpackBufferPtr = hpackBuffer;
 
     for (size_t i = 0; i < basket -> request.numHeaders; i++) {
+        if (!basket -> request.headers[i].isPseudo &&
+            strcasecmp(basket -> request.headers[i].name, "connection") == 0) {
+            continue;
+        }
         LOG("DEBUG", "Request Header: %s: %s", basket -> request.headers[i].name, basket -> request.headers[i].value);
         if (basket -> request.headers[i].isPseudo) {
             hpackBufferPtr = hpackPseudoHeaders(basket, basket -> request.headers[i], hpackBufferPtr);
