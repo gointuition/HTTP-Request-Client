@@ -149,7 +149,7 @@ void cleanupSessions(int isAll) {
             if (isAll == 1 // cleanup all sessions before stopping the process
                 || session -> goingAway == 1 // GOAWAY / connection loss: not reusable
                 || isConnecting(session) != 1 // cleanup closed sessions
-                || (time(NULL) - session -> lastUsedTime) > (session -> expirationInMilliseconds) // cleanup expired sessions
+                || (time(NULL) - session -> lastUsedTime) * 1000 > (time_t) session -> expirationInMilliseconds // idle longer than expirationInMilliseconds (lastUsedTime is in seconds, so scale up to ms)
             ) {
                 LOG("DEBUG", "cleanup session %s//:%s:%s#%s//:%s:%s@%s", session -> scheme, session -> host, session -> port, session -> proxy.scheme, session -> proxy.host, session -> proxy.port, session -> proxy.authorization);
                 toClose[closeCount++] = session;

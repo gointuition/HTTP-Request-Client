@@ -23,3 +23,4 @@
 - [x] **CONNECT Timeout** — Sometimes CONNECT cost too much time
 - [x] **Non-Blocking Mode** — Per-request `non-blocking` field selects blocking (default) vs. non-blocking socket I/O (`O_NONBLOCK` + `select`/`SSL_ERROR_WANT_*` retry) for the HTTP/2 transfer phase
 - [x] **Async Request API** — `handleRequestAsync`/`pollRequest` fire-and-forget surface: send the request and return immediately, poll for the response later without occupying a thread (C core + Node.js `requestNonBlocking`)
+- [ ] **Certification Verification** — Implement
