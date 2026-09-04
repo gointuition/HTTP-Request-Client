@@ -77,7 +77,7 @@ public class HttpClient {
 
     /**
      * Send an HTTP request.
-     * Corresponds to C: handleRequest(const char*) in blocking mode
+     * Corresponds to C: handleRequest(const char*, NULL) in blocking mode
      * ("non-blocking" is forced to 0 by the native bridge).
      *
      * @param requestJson JSON string describing the request config.
@@ -93,7 +93,7 @@ public class HttpClient {
 
     /**
      * Start a non-blocking request (send HEADERS/DATA, return immediately).
-     * Corresponds to C: handleRequest(const char*) with "non-blocking" forced
+     * Corresponds to C: handleRequest(const char*, NULL) with "non-blocking" forced
      * to 1; the returned basket handle is the id to poll via
      * nativePollRequest.
      *

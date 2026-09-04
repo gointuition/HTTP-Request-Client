@@ -66,7 +66,8 @@ static char *buildRequest(int expirationMs) {
 // Run one blocking request and return the streamId assigned by the pool
 // (>=1), or -1 on failure.
 static int runOnce(const char *requestJson) {
-    const intptr_t handle = handleRequest(requestJson);
+    // NULL contract: the library collects the body, this test only reads the basket
+    const intptr_t handle = handleRequest(requestJson, NULL);
     if (handle == 0) {
         printf("  handleRequest() returned 0\n");
         return -1;
