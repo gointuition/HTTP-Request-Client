@@ -135,7 +135,7 @@ static int runRequestFile(const char *path) {
     int ok = 1;
     for (int attempt = 1; attempt <= 2; attempt++) {
         int actualLen = 0;
-        const intptr_t handle = handleRequest(blockingJson);
+        const intptr_t handle = handleRequest(blockingJson, NULL);
         char *basketStr = NULL;
         if (handle != 0) {
             basketStr = collectResponse(handle, &actualLen);
@@ -174,7 +174,7 @@ static int runRequestFileAsync(const char *path) {
     intptr_t ids[ASYNC_COUNT];
     int started = 0;
     for (int i = 0; i < ASYNC_COUNT; i++) {
-        ids[i] = handleRequest(requestStr);
+        ids[i] = handleRequest(requestStr, NULL);
         if (ids[i] == 0) {
             LOG("ERROR", "%s: failed to start async request #%d", path, i);
         } else {

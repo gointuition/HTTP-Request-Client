@@ -6,7 +6,7 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <zlib.h>
+#include <strings.h>
 #include <ctype.h>
 #ifndef _WIN32
 #include <sys/select.h>
@@ -18,9 +18,8 @@
 #include "Http2RequestHandler.h"
 #include "Error.h"
 #include "CompressHandler.h"
+#include "ResponseStream.h"
 #include "Log.h"
-
-#include "brotli/decode.h"
 
 // SETTINGS id to name mapping
 typedef  struct {
@@ -108,16 +107,32 @@ static const ResponseHeaderStaticTable responseHeaderStaticTable[] = {
         {"www-authenticate", ""}
 };
 
-typedef enum {
-    ENCODING_IDENTITY = 0,
-    ENCODING_GZIP = 1,
-    ENCODING_DEFLATE = 2,
-    ENCODING_BROTLI = 4,
-    ENCODING_ZSTD = 8
-} ContentEncoding;
+// What the reader thread still has to write once the stream lock is released:
+// flow-control credit for the bytes just consumed, the stream to cancel when
+// the consumer stopped the response, and whether the peer reset the stream.
+typedef struct {
+    uint32_t consumedBytes;
+    uint32_t cancelStreamId;
+    int      ended;
+    int      reset;
+} StreamReading;
+
+// Flow-control credit is batched, like a browser, to keep the frame density
+// low: stream-scope at MAX_FRAME_SIZE granularity, connection-scope at one
+// initial window. The connection window auto-tunes up to CONNECTION_WINDOW_MAX
+// as long as the pipe keeps sustaining full-window flows.
+#define STREAM_WINDOW_UPDATE_THRESHOLD 16384
+#define CONNECTION_WINDOW_UPDATE_THRESHOLD 65535
+#define CONNECTION_WINDOW_MAX 16777216
 
 static void readerDispatch(Session *session, unsigned char *payload, uint32_t length,
                            uint8_t type, uint8_t flags, uint32_t streamId);
+static StreamReading endStreamReading(Stream *stream, uint8_t type, uint32_t length);
+static void replenishStreamWindow(Session *session, uint32_t streamId, const StreamReading *reading);
+static void tuneConnectionWindow(Session *session, uint32_t consumed);
+static PendingWindowUpdate* findPendingWindow(Session *session, uint32_t streamId);
+static void addStreamWindowCredit(Session *session, uint32_t streamId, uint32_t credit);
+static void discardPendingStreamWindow(Session *session, uint32_t streamId);
 static Stream* findStream(Session *session, uint32_t streamId);
 static void handleDataFrame(Stream *stream, unsigned char *payload, uint32_t length);
 static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t length, uint8_t flags, HpackContext *ctx);
@@ -130,8 +145,8 @@ static void handleRST_STREAMFrame(Session *session, Stream *stream, unsigned cha
 static void handleSettingsFrame(unsigned char *payload, uint32_t length);
 static void handleWindowUpdateFrame(unsigned char *payload, uint32_t length, uint32_t streamId);
 static void handleGoAwayFrame(Session *session, unsigned char *payload, uint32_t length);
-static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPayload, size_t combinedPayloadSize);
-static ContentEncoding detectContentEncoding(Basket *basket);
+static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPayload, size_t combinedPayloadSize,
+                                    int payloadDecoded);
 static const char* getSettingsName(uint16_t id);
 static const char* getErrorName(uint32_t code);
 
@@ -230,6 +245,10 @@ void* readerLoop(void *arg) {
                 }
                 accSize = remaining;
             }
+
+            // Batch end: every control frame this batch produced leaves in one
+            // coalesced write, like a browser's write queue.
+            flushReaderWrites(session);
         } else {
             int err = SSL_get_error(ssl, bytesRead);
             if (err == SSL_ERROR_WANT_READ) {
@@ -274,10 +293,15 @@ static void readerDispatch(Session *session, unsigned char *payload, uint32_t le
             pthread_mutex_lock(&stream -> lock);
             pthread_mutex_unlock(&session -> streamsMutex);
             handleStreamFrame(session, stream, payload, length, type, flags, streamId);
-            if (stream -> isEnded) {
-                pthread_cond_signal(&stream -> cond);
-            }
+            const StreamReading reading = endStreamReading(stream, type, length);
             pthread_mutex_unlock(&stream -> lock);
+
+            // The stream may be harvested and freed as soon as the lock is
+            // released: only the ids read back here are safe to write.
+            replenishStreamWindow(session, streamId, &reading);
+            if (reading.cancelStreamId != 0) {
+                queueRSTStreamFrame(session, reading.cancelStreamId);
+            }
         } else {
             pthread_mutex_unlock(&session -> streamsMutex);
             // Unknown/closed stream: still process (HEADERS keep HPACK in sync).
@@ -289,25 +313,126 @@ static void readerDispatch(Session *session, unsigned char *payload, uint32_t le
         if (type == 0x4 && (flags & 0x1) == 0) {
             // Server SETTINGS (not an ACK): the peer must be acknowledged with
             // an empty SETTINGS frame carrying the ACK flag, or a strict server
-            // (e.g. nghttp2) GOAWAYs with SETTINGS_TIMEOUT. Serialize the write
-            // with the request threads via writeMutex.
+            // (e.g. nghttp2) GOAWAYs with SETTINGS_TIMEOUT. Queued and written
+            // with the batch-end burst (serialized via writeMutex there).
             static const unsigned char settingsAck[9] = {0, 0, 0, 0x4, 0x1, 0, 0, 0, 0};
-            pthread_mutex_lock(&session -> writeMutex);
-            sslWriteAllEx(session -> ssl, session -> nonBlocking, 5000, settingsAck, sizeof(settingsAck));
-            pthread_mutex_unlock(&session -> writeMutex);
+            queueControlFrame(session, settingsAck, sizeof(settingsAck));
         } else if (type == 0x6 && (flags & 0x1) == 0 && length == 8) {
             // PING (not an ACK): echo the 8-byte opaque payload back with the
             // ACK flag set so a keep-alive probe on a long-lived multiplexed
             // connection does not tear it down.
             unsigned char pingAck[17] = {0, 0, 8, 0x6, 0x1, 0, 0, 0, 0};
             memcpy(pingAck + 9, payload, 8);
-            pthread_mutex_lock(&session -> writeMutex);
-            sslWriteAllEx(session -> ssl, session -> nonBlocking, 5000, pingAck, sizeof(pingAck));
-            pthread_mutex_unlock(&session -> writeMutex);
+            queueControlFrame(session, pingAck, sizeof(pingAck));
         }
         if (type == 0x7) { // GOAWAY: fail streams that have no response yet
             failAllStreams(session, 1);
         }
+    }
+}
+
+// Runs on the reader thread with `stream` locked: ends the callback sequence
+// once the body is over (or once the consumer stopped it, which no END_STREAM
+// will ever announce) and reports what still has to go on the wire.
+static StreamReading endStreamReading(Stream *stream, uint8_t type, uint32_t length) {
+    StreamReading reading = { 0, 0, 0, 0 };
+    reading.reset = type == 0x3;
+    if (stream -> isEnded) {
+        pthread_cond_signal(&stream -> cond);
+        completeResponseSink(stream);
+        reading.ended = 1;
+    }
+
+    const int streaming = isResponseStreaming(stream);
+    if (!streaming) { return reading; }
+
+    reading.consumedBytes = type == 0x0 ? length : 0;
+    const int cancelled = takeResponseCancellation(stream);
+    if (!cancelled) { return reading; }
+
+    if (!reading.ended) {
+        stream -> isEnded = 1;
+        pthread_cond_signal(&stream -> cond);
+        completeResponseSink(stream);
+    }
+    reading.cancelStreamId = stream -> streamId;
+    return reading;
+}
+
+// A streaming body must hand the peer its flow-control credit back, or it
+// stalls as soon as the initial window is spent. Buffered bodies never reached
+// that limit, so they keep sending no window update at all. Credit is batched
+// per stream and per connection and only queued here; the read batch end
+// writes everything in one burst. A dead stream (ended, reset or cancelled by
+// the consumer) never gets an update since no further DATA can arrive.
+static void replenishStreamWindow(Session *session, uint32_t streamId, const StreamReading *reading) {
+    if (reading -> consumedBytes > 0) {
+        session -> pendingConnWindow += reading -> consumedBytes;
+        tuneConnectionWindow(session, reading -> consumedBytes);
+    }
+
+    const int streamDead = reading -> ended || reading -> reset || reading -> cancelStreamId != 0;
+    if (streamDead) {
+        discardPendingStreamWindow(session, streamId);
+    } else if (reading -> consumedBytes > 0) {
+        addStreamWindowCredit(session, streamId, reading -> consumedBytes);
+    }
+
+    const int flushConnection = reading -> ended || session -> pendingConnWindow >= CONNECTION_WINDOW_UPDATE_THRESHOLD;
+    if (flushConnection) { session -> connWindowFlushDue = 1; }
+}
+
+// Browser-like session window auto-tuning: once a full target window's worth
+// of data has been consumed (the pipe sustained that flow), double the target
+// up to CONNECTION_WINDOW_MAX. The growth delta rides the owed connection
+// credit, so the next batch-end flush advertises the larger window.
+static void tuneConnectionWindow(Session *session, uint32_t consumed) {
+    if (session -> connWindowTarget >= CONNECTION_WINDOW_MAX) { return; }
+
+    session -> connWindowSinceGrowth += consumed;
+    if (session -> connWindowSinceGrowth < session -> connWindowTarget) { return; }
+
+    session -> connWindowSinceGrowth -= session -> connWindowTarget;
+    const uint32_t previousTarget = session -> connWindowTarget;
+    const uint32_t doubled = previousTarget * 2;
+    session -> connWindowTarget = doubled < CONNECTION_WINDOW_MAX ? doubled : CONNECTION_WINDOW_MAX;
+    session -> pendingConnWindow += session -> connWindowTarget - previousTarget;
+    session -> connWindowFlushDue = 1;
+    LOG("DEBUG", "connection window auto-tuned to %u", session -> connWindowTarget);
+}
+
+// ─── reader-thread flow-control ledger (no other thread touches it) ───
+
+static PendingWindowUpdate* findPendingWindow(Session *session, uint32_t streamId) {
+    for (int i = 0; i < session -> pendingStreamWindowCount; i++) {
+        if (session -> pendingStreamWindows[i].streamId == streamId) {
+            return &session -> pendingStreamWindows[i];
+        }
+    }
+    return NULL;
+}
+
+static void addStreamWindowCredit(Session *session, uint32_t streamId, uint32_t credit) {
+    PendingWindowUpdate *entry = findPendingWindow(session, streamId);
+    if (entry == NULL) {
+        if (session -> pendingStreamWindowCount >= MAX_CONCURRENT_STREAMS_PER_SESSION) { return; }
+        entry = &session -> pendingStreamWindows[session -> pendingStreamWindowCount++];
+        entry -> streamId = streamId;
+        entry -> credit = 0;
+    }
+    entry -> credit += credit;
+    if (entry -> credit <= STREAM_WINDOW_UPDATE_THRESHOLD) { return; }
+
+    queueWindowUpdateFrame(session, streamId, entry -> credit);
+    entry -> credit = 0;
+}
+
+static void discardPendingStreamWindow(Session *session, uint32_t streamId) {
+    for (int i = 0; i < session -> pendingStreamWindowCount; i++) {
+        if (session -> pendingStreamWindows[i].streamId != streamId) { continue; }
+        session -> pendingStreamWindows[i] = session -> pendingStreamWindows[session -> pendingStreamWindowCount - 1];
+        session -> pendingStreamWindowCount--;
+        return;
     }
 }
 
@@ -368,6 +493,12 @@ void handleStreamFrame(Session *session, Stream *stream,
             break;
     }
 
+    // END_HEADERS: the response headers are complete, a streaming consumer
+    // gets them before any body byte.
+    if (stream && type == 0x1 && (flags & 0x4)) {
+        deliverResponseHeaders(stream);
+    }
+
     // END_STREAM flag on DATA/HEADERS completes the stream.
     if (stream && (type == 0x0 || type == 0x1) && (flags & 0x1)) {
         stream -> isEnded = 1;
@@ -376,16 +507,10 @@ void handleStreamFrame(Session *session, Stream *stream,
 }
 
 static void handleDataFrame(Stream *stream, unsigned char *payload, uint32_t length) {
-    if (length == 0) return;
-
-    unsigned char *newPayload = realloc(stream -> combinedPayload, stream -> combinedPayloadSize + length);
-    if (!newPayload) {
-        stream -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
-        return;
+    const int keepReading = appendStreamPayload(stream, payload, length);
+    if (!keepReading) {
+        LOG("DEBUG", "Stream %u body is no longer wanted.", stream -> streamId);
     }
-    stream -> combinedPayload = newPayload;
-    memcpy(stream -> combinedPayload + stream -> combinedPayloadSize, payload, length);
-    stream -> combinedPayloadSize += length;
 }
 
 /**
@@ -889,6 +1014,7 @@ void failAllStreams(Session *session, int onlyPending) {
                               : ERR_RESPONSE_READING_CONNECTION_ERROR;
             stream -> isEnded = 1;
             pthread_cond_signal(&stream -> cond);
+            completeResponseSink(stream);
         }
         pthread_mutex_unlock(&stream -> lock);
     }
@@ -950,16 +1076,21 @@ void finalizeStreamIntoBasket(Basket *basket, Stream *stream) {
 
     unsigned char *combinedPayload = stream -> combinedPayload;
     size_t combinedPayloadSize = stream -> combinedPayloadSize;
+    const int payloadDecoded = stream -> payloadDecoded;
     stream -> combinedPayload = NULL;
     stream -> combinedPayloadSize = 0;
 
     pthread_mutex_unlock(&stream -> lock);
 
     // Decompression can be slow; run it without holding the stream lock.
-    finalizeResponsePayload(basket, combinedPayload, combinedPayloadSize);
+    finalizeResponsePayload(basket, combinedPayload, combinedPayloadSize, payloadDecoded);
 }
 
-static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPayload, size_t combinedPayloadSize) {
+// A payload the response funnel already decoded arrives plain and takes the
+// identity path; otherwise the encoding decides between a one-shot decode and
+// base64 (decompression not requested).
+static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPayload, size_t combinedPayloadSize,
+                                    int payloadDecoded) {
     if (combinedPayloadSize == 0) {
         // TODO empty body
         LOG("DEBUG", "no response...");
@@ -967,7 +1098,8 @@ static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPaylo
         return;
     }
 
-    const ContentEncoding encoding = detectContentEncoding(basket);
+    const ContentEncoding encoding = payloadDecoded ? ENCODING_IDENTITY
+                                     : detectContentEncoding(basket -> response.headers, basket -> response.numHeaders);
     if (encoding == ENCODING_IDENTITY) {
         LOG("DEBUG", "plain text...");
         // ensure null-termination for json_string() in basketToString
@@ -1022,19 +1154,6 @@ static void finalizeResponsePayload(Basket *basket, unsigned char *combinedPaylo
     basket -> response.payload = decompressedObj -> decompressedPayload;
     free(decompressedObj);
     free(combinedPayload);
-}
-
-static ContentEncoding detectContentEncoding(Basket *basket) {
-    for (size_t i = 0; i < basket -> response.numHeaders; i++) {
-        if (strcasecmp(basket -> response.headers[i].name, "content-encoding") == 0) {
-            if (strcasecmp(basket -> response.headers[i].value, "gzip") == 0) { return ENCODING_GZIP; }
-            if (strcasecmp(basket -> response.headers[i].value, "br") == 0) { return ENCODING_BROTLI; }
-            if (strcasecmp(basket -> response.headers[i].value, "deflate") == 0) { return ENCODING_DEFLATE; }
-            if (strcasecmp(basket -> response.headers[i].value, "zstd") == 0) { return ENCODING_ZSTD; }
-            break;
-        }
-    }
-    return ENCODING_IDENTITY;
 }
 
 void freeStreamBuffers(Stream *stream) {

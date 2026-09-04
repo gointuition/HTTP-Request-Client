@@ -23,6 +23,7 @@
 #include "Http2RequestHandler.h"
 #include "UrlParser.h"
 #include "Error.h"
+#include "ResponseStream.h"
 #include "Log.h"
 
 typedef struct {
@@ -41,7 +42,6 @@ typedef struct {
 static void handleHttp11RequestAsync(Basket *basket, Stream *stream);
 static void handleHttp11RequestSync(Basket *basket, Stream *stream);
 static void *http11ExchangeThread(void *arg);
-static void computeResponseDeadline(Basket *basket, struct timespec *deadline);
 static void endStream(Stream *stream);
 
 static char* buildHttp11Request(Basket *basket, size_t *outLen);
@@ -107,7 +107,7 @@ static void handleHttp11RequestSync(Basket *basket, Stream *stream) {
 
     // after the lock: the reading timeout starts when this exchange actually runs
     struct timespec deadline;
-    computeResponseDeadline(basket, &deadline);
+    buildResponseDeadline(&deadline, basket -> responseReadingTimeoutInMilliseconds);
 
     sendHttp11Request(basket, stream);
     if (stream -> error.code == NULL) {
@@ -130,21 +130,11 @@ static void *http11ExchangeThread(void *arg) {
     return NULL;
 }
 
-static void computeResponseDeadline(Basket *basket, struct timespec *deadline) {
-    clock_gettime(CLOCK_REALTIME, deadline);
-    const long ms = basket -> responseReadingTimeoutInMilliseconds;
-    deadline -> tv_sec += ms / 1000;
-    deadline -> tv_nsec += (ms % 1000) * 1000000L;
-    if (deadline -> tv_nsec >= 1000000000L) {
-        deadline -> tv_sec += 1;
-        deadline -> tv_nsec -= 1000000000L;
-    }
-}
-
 static void endStream(Stream *stream) {
     pthread_mutex_lock(&stream -> lock);
     stream -> isEnded = 1;
     pthread_cond_signal(&stream -> cond);
+    completeResponseSink(stream);
     pthread_mutex_unlock(&stream -> lock);
 }
 

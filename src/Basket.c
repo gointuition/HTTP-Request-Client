@@ -10,6 +10,7 @@
 #include <ctype.h>
 
 #include "Log.h"
+#include "ResponseStream.h"
 
 #include "jansson.h"
 
@@ -335,6 +336,8 @@ void initBasket(Basket * basket) {
     basket -> request.urlComponents = (URLComponents) { 0, 0, 0, 0, 0 };
 
     basket -> response = (Response) { 0, 0,NULL, NULL };
+
+    basket -> sink = NULL;
 
     basket -> proxy = (Proxy) { 0, 0, 0, 0, 0 };
 
@@ -833,6 +836,8 @@ void freeBasket(Basket *basket) {
 //        LOG("DEBUG", "free basket -> response.payload");
         free(basket -> response.payload);
     }
+    // streaming sink (the callback contract itself belongs to the caller)
+    freeResponseSink(basket -> sink);
     free(basket);
 //    LOG("DEBUG", "free basket");
 }
@@ -933,6 +938,13 @@ char* basketToString(Basket *basket, int *outLen) {
         }
     }
     json_object_set_new(response, "headers", responseHeaders);
+
+    // 1 = the body went to the caller's streaming callbacks instead of payload
+    const int contractStreamed = isContractStreamed(basket);
+    json_object_set_new(response, "streamed", json_integer(contractStreamed));
+    if (!contractStreamed) {
+        LOG("DEBUG", "the library collected %zu bytes of response body", basket -> response.payloadSize);
+    }
 
     if (basket -> response.payload != NULL) {
         json_object_set_new(response, "payload", json_string((const char*) basket -> response.payload));

@@ -98,7 +98,7 @@ int main(int argc, char *argv[]) {
 
     // step 1: run the blocking request and collect the completed result
     int actualLen = 0;
-    intptr_t handle = handleRequest(requestStr);
+    intptr_t handle = handleRequest(requestStr, NULL);
     char *basketStr = NULL;
     if (handle != 0) {
         basketStr = collectResponse(handle, &actualLen);
@@ -119,7 +119,7 @@ int main(int argc, char *argv[]) {
 
     // step 1: run the blocking request again (must reuse the pooled session)
     actualLen = 0;
-    handle = handleRequest(requestStr);
+    handle = handleRequest(requestStr, NULL);
     basketStr = NULL;
     if (handle != 0) {
         basketStr = collectResponse(handle, &actualLen);

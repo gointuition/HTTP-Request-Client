@@ -17,6 +17,7 @@ extern "C" {
 #endif
 
 #include <stdio.h>
+#include <time.h>
 #include <pthread.h>
 
 #include "UrlParser.h"
@@ -39,6 +40,9 @@ typedef struct {
 } TLSConnInfo;
 
 #define RESPONSE_HEADERS_MAX_SIZE 64
+
+// Library-owned state of a streaming response sink (see ResponseStream.h).
+typedef struct ResponseSink ResponseSink;
 
 #define HTTP_METHOD_GET "GET"
 #define HTTP_METHOD_POST "POST"
@@ -112,6 +116,9 @@ typedef struct {
 // Maximum number of concurrent streams multiplexed over a single connection.
 #define MAX_CONCURRENT_STREAMS_PER_SESSION 256
 
+// RFC 7540 default flow-control window for both stream and connection scope.
+#define HTTP2_INITIAL_FLOW_CONTROL_WINDOW 65535
+
 // Per-stream state for HTTP/2 multiplexing. The connection reader thread
 // demultiplexes inbound frames by stream id into these structures; the
 // requesting thread waits on `cond` until `isEnded` is set, then copies the
@@ -119,14 +126,24 @@ typedef struct {
 typedef struct Stream {
     uint32_t            streamId;
     int                 isEnded;
+    ResponseSink        *sink;        // response funnel: caller contract or library collector
     ResponseHeader      *headers;
     size_t              numHeaders;
     unsigned char       *combinedPayload;
     size_t              combinedPayloadSize;
+    int                 payloadDecoded; // the funnel already decoded the body (no one-shot pass)
+    time_t              lastActivityTime; // last body chunk received (streaming idle timeout)
     Error               error;
     pthread_mutex_t     lock;
     pthread_cond_t      cond;
 } Stream;
+
+// Stream-scope flow-control credit consumed but not yet returned to the peer.
+// Reader thread only: batched into fewer WINDOW_UPDATE frames, like a browser.
+typedef struct {
+    uint32_t streamId;
+    uint32_t credit;
+} PendingWindowUpdate;
 
 typedef struct {
     char                scheme[16];
@@ -160,6 +177,15 @@ typedef struct {
     int                 readerStarted;  // whether pthread_create succeeded (join guard)
     volatile int        goingAway;      // set on GOAWAY / connection loss; blocks reuse
     Error               connError;      // connection-level error (GOAWAY reason), applied to streams
+    uint32_t            pendingConnWindow; // connection-scope flow credit owed (reader thread only)
+    PendingWindowUpdate pendingStreamWindows[MAX_CONCURRENT_STREAMS_PER_SESSION]; // reader thread only
+    int                 pendingStreamWindowCount;
+    int                 connWindowFlushDue; // reader-only: the batch end must flush connection credit
+    uint32_t            connWindowTarget;   // reader-only: auto-tuned total connection window
+    uint32_t            connWindowSinceGrowth; // reader-only: bytes consumed since the last window growth
+    unsigned char       *pendingWire;       // reader-only: control frames queued for the batch-end write
+    size_t              pendingWireSize;
+    size_t              pendingWireCapacity;
 } Session;
 
 typedef struct {
@@ -181,6 +207,7 @@ typedef struct {
     Proxy       proxy;
     Request     request;
     Response    response;
+    ResponseSink *sink;       // response funnel owned by this request (always set)
     Error       error;
     Session     *session;
 } Basket;

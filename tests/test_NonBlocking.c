@@ -114,7 +114,7 @@ int main(int argc, char *argv[]) {
     intptr_t ids[MAX_REQUESTS];
     int started = 0;
     for (int i = 0; i < concurrency; i++) {
-        ids[i] = handleRequest(requestJson);
+        ids[i] = handleRequest(requestJson, NULL);
         if (ids[i] == 0) {
             LOG("ERROR", "failed to start request #%d (id=0)", i);
         } else {

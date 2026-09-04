@@ -2,7 +2,7 @@
 
 - [x] **More HTTP Methods** — Full support for PUT / PATCH / DELETE (enums defined, logic pending)
 - [x] **Concurrent Multiplexing** — Thread-safe shared connection with a per-connection reader thread; concurrent same-host requests are multiplexed on separate streams. Exposed to Node.js via the Promise-based `requestAsync`.
-- [ ] **Streaming Response** — Callback-based streaming for large files / long-lived connections
+- [x] **Streaming Response** — Callback-based streaming for large files / long-lived connections: every response body travels the `ResponseStream` funnel on both transports — `onHeaders` / `onData` / `onComplete` chunk by chunk when the caller passes a contract, a library-side collector when it does not, which is all a buffered response is now — decoding gzip / deflate / Brotli / Zstd incrementally, replenishing HTTP/2 flow control as the consumer reads, stopping the response on a non-zero `onData` return (RST_STREAM / connection close), and turning `responseReadingTimeoutInMilliseconds` into an idle timeout. C core + the Node.js / Python / Java bindings
 - [x] **API Versioning** — Shared library soname version control
 - [x] **CI/CD** — GitHub Actions for automated build and test
 - [x] **HTTP/1.1** — Protocol downgrade / fallback compatibility support: ALPN downgrade (server picks `http/1.1` or selects nothing), forced protocol via `"session": {"protocol": "http/1.1"}`, plain `http://` URLs (absolute-form through proxies without CONNECT), and automatic retry over HTTP/1.1 on `HTTP_1_1_REQUIRED` (RST_STREAM / GOAWAY 0xd)

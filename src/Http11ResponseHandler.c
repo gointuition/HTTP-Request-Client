@@ -22,16 +22,19 @@
 
 #include "Error.h"
 #include "Log.h"
+#include "ResponseStream.h"
 
 #define HTTP11_MAX_HEADER_SECTION (64 * 1024)
 #define HTTP11_READ_CHUNK 16384
 
 typedef struct {
     Session *session;
+    Stream *stream;
     unsigned char *buf;
     size_t len;
     size_t pos;
-    const struct timespec *deadline;
+    struct timespec deadline;
+    int timeoutInMilliseconds;
     int eof;
     int err; // 0 none, -1 error, -2 timeout
 } Http11Reader;
@@ -53,16 +56,15 @@ static int readChunkedBody(Stream *stream, Http11Reader *reader);
 static int isTrailerEnd(const char *line);
 static int readContentLengthBody(Stream *stream, Http11Reader *reader, long long bodyLen);
 static int readUntilCloseBody(Stream *stream, Http11Reader *reader);
-static void closeSessionIfSingleUse(Session *session, Stream *stream, int untilClose);
+static void closeSessionIfSingleUse(Session *session, Stream *stream, int untilClose, int bodyRc);
 
 static void readerFill(Http11Reader *reader);
 static int readerEndCode(const Http11Reader *reader);
 static int readerReadLine(Http11Reader *reader, char **line);
-static int readerReadExact(Http11Reader *reader, unsigned char **out, size_t n);
+static int readerReadBody(Stream *stream, Http11Reader *reader, size_t n);
 static ssize_t sessionReadTimed(Session *session, unsigned char *buf, size_t len,
                                 const struct timespec *deadline);
 
-static int appendStreamPayload(Stream *stream, const unsigned char *data, size_t n);
 static void addStreamHeader(Stream *stream, const char *name, const char *value);
 static const char* streamHeaderValue(Stream *stream, const char *name);
 
@@ -78,7 +80,8 @@ static int connectionClosedByPeer(Stream *stream);
 
 void receiveHttp11Response(Basket *basket, Stream *stream, const struct timespec *deadline) {
     Session *session = basket -> session;
-    Http11Reader reader = { session, NULL, 0, 0, deadline, 0, 0 };
+    Http11Reader reader = { session, stream, NULL, 0, 0, *deadline,
+                            basket -> responseReadingTimeoutInMilliseconds, 0, 0 };
 
     const int status = readResponseHead(stream, &reader);
     if (stream -> error.code != NULL) {
@@ -87,11 +90,13 @@ void receiveHttp11Response(Basket *basket, Stream *stream, const struct timespec
         return;
     }
 
+    deliverResponseHeaders(stream);
+
     int untilClose = 0;
-    readBody(basket, stream, &reader, status, &untilClose);
+    const int bodyRc = readBody(basket, stream, &reader, status, &untilClose);
     free(reader.buf);
 
-    closeSessionIfSingleUse(session, stream, untilClose);
+    closeSessionIfSingleUse(session, stream, untilClose, bodyRc);
 }
 
 // Reads status line + headers; on failure sets stream->error.
@@ -118,8 +123,13 @@ static int readResponseHead(Stream *stream, Http11Reader *reader) {
     return status;
 }
 
-static void closeSessionIfSingleUse(Session *session, Stream *stream, int untilClose) {
-    if (untilClose || connectionClosedByPeer(stream)) {
+// The connection can only be reused when the whole body left it: anything else
+// (until-close framing, a consumer that stopped the response, a timeout or a
+// failed read) leaves bytes that the next response would parse as its headers.
+static void closeSessionIfSingleUse(Session *session, Stream *stream, int untilClose, int bodyRc) {
+    const int cancelled = takeResponseCancellation(stream);
+    const int bodyComplete = bodyRc == 1 || bodyRc == 0;
+    if (untilClose || cancelled || !bodyComplete || connectionClosedByPeer(stream)) {
         session -> goingAway = 1;
     }
 }
@@ -275,15 +285,9 @@ static int readChunkedBody(Stream *stream, Http11Reader *reader) {
             return 1;
         }
 
-        unsigned char *chunk = NULL;
-        const int dataRc = readerReadExact(reader, &chunk, (size_t) chunkSize);
+        const int dataRc = readerReadBody(stream, reader, (size_t) chunkSize);
         if (dataRc != 1) {
             return dataRc;
-        }
-        const int appendRc = appendStreamPayload(stream, chunk, (size_t) chunkSize);
-        free(chunk);
-        if (appendRc != 1) {
-            return -1;
         }
 
         char *crlf = NULL;
@@ -301,21 +305,14 @@ static int isTrailerEnd(const char *line) {
 
 static int readContentLengthBody(Stream *stream, Http11Reader *reader, long long bodyLen) {
     if (bodyLen == 0) { return 1; }
-    unsigned char *body = NULL;
-    const int readRc = readerReadExact(reader, &body, (size_t) bodyLen);
-    if (readRc != 1) {
-        return readRc;
-    }
-    const int appendRc = appendStreamPayload(stream, body, (size_t) bodyLen);
-    free(body);
-    return appendRc == 1 ? 1 : -1;
+    return readerReadBody(stream, reader, (size_t) bodyLen);
 }
 
 static int readUntilCloseBody(Stream *stream, Http11Reader *reader) {
     unsigned char chunk[HTTP11_READ_CHUNK];
     for (;;) {
         const ssize_t readRc = sessionReadTimed(reader -> session, chunk, sizeof(chunk),
-                                                reader -> deadline);
+                                                &reader -> deadline);
         if (readRc > 0) {
             const int appendRc = appendStreamPayload(stream, chunk, (size_t) readRc);
             if (appendRc != 1) { return -1; }
@@ -365,9 +362,14 @@ static void readerFill(Http11Reader *reader) {
     reader -> buf = newBuf;
 
     const ssize_t readRc = sessionReadTimed(reader -> session, reader -> buf + reader -> len,
-                                            HTTP11_READ_CHUNK, reader -> deadline);
+                                            HTTP11_READ_CHUNK, &reader -> deadline);
     if (readRc > 0) {
         reader -> len += (size_t) readRc;
+        const int renewed = renewStreamDeadline(reader -> stream, reader -> timeoutInMilliseconds,
+                                                &reader -> deadline);
+        if (renewed) {
+            LOG("DEBUG", "http/1.1: streaming response, reading deadline extended");
+        }
     } else if (readRc == 0) {
         reader -> eof = 1;
     } else {
@@ -411,28 +413,26 @@ static int readerReadLine(Http11Reader *reader, char **line) {
     }
 }
 
-// Returns 1 on success, 0 on premature EOF, -1 on error, -2 on timeout.
-static int readerReadExact(Http11Reader *reader, unsigned char **out, size_t n) {
-    unsigned char *data = malloc(n > 0 ? n : 1);
-    if (data == NULL) { return -1; }
-
-    size_t got = 0;
-    while (got < n) {
+// Reads exactly n body bytes and feeds them to the stream in place, so a large
+// body never needs a full copy. Returns 1 on success, 0 on premature EOF, -1 on
+// error, -2 on timeout.
+static int readerReadBody(Stream *stream, Http11Reader *reader, size_t n) {
+    size_t remaining = n;
+    while (remaining > 0) {
         const size_t avail = reader -> len - reader -> pos;
         if (avail > 0) {
-            const size_t take = (n - got) < avail ? (n - got) : avail;
-            memcpy(data + got, reader -> buf + reader -> pos, take);
+            const size_t take = remaining < avail ? remaining : avail;
+            const int appendRc = appendStreamPayload(stream, reader -> buf + reader -> pos, take);
             reader -> pos += take;
-            got += take;
+            remaining -= take;
+            if (appendRc != 1) { return -1; }
             continue;
         }
         if (reader -> eof || reader -> err != 0) {
-            free(data);
             return readerEndCode(reader);
         }
         readerFill(reader);
     }
-    *out = data;
     return 1;
 }
 
@@ -494,19 +494,6 @@ static ssize_t sessionReadTimed(Session *session, unsigned char *buf, size_t len
 }
 
 // ─── stream helpers ───
-
-static int appendStreamPayload(Stream *stream, const unsigned char *data, size_t n) {
-    if (n == 0) { return 1; }
-    unsigned char *newPayload = realloc(stream -> combinedPayload, stream -> combinedPayloadSize + n);
-    if (newPayload == NULL) {
-        stream -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
-        return -1;
-    }
-    stream -> combinedPayload = newPayload;
-    memcpy(stream -> combinedPayload + stream -> combinedPayloadSize, data, n);
-    stream -> combinedPayloadSize += n;
-    return 1;
-}
 
 static void addStreamHeader(Stream *stream, const char *name, const char *value) {
     if (stream -> numHeaders >= RESPONSE_HEADERS_MAX_SIZE) {

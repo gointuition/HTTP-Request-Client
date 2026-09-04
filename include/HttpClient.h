@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "Basket.h"
+#include "ResponseStream.h"
 #include "Version.h"
 
 #ifdef __cplusplus
@@ -55,7 +56,17 @@ int connectTo(const char *hostname, const char *port);
 //   is fully copied out — only pass the handle to handleResponse().
 //   blocking ("non-blocking": 0): the whole exchange finishes before returning;
 //   handleResponse() copies the already-complete result into the buffer.
-intptr_t handleRequest(const char *requestJSONString);
+// The body always travels the streaming funnel; `stream` only decides who
+// receives it: NULL installs the library's own collector, which accumulates the
+// decoded body into the basket payload so handleResponse() returns the complete
+// response (what every binding passes); a contract gets the body chunk by chunk
+// instead, and the collected JSON then reports "streamed": 1 with no payload.
+// `stream` is borrowed for the lifetime of the request (until its handle is
+// reaped by handleResponse()), so the caller must keep it alive that long. A
+// contract must be complete: one missing callback is refused with
+// ERR_RESPONSE_STREAM_INCOMPLETE_CONTRACT and the request is not sent. See
+// ResponseStream.h for the callback contract.
+intptr_t handleRequest(const char *requestJSONString, const ResponseStream *stream);
 
 // ─── Response retrieval (unified) ───
 // Collect the response for a handle returned by handleRequest(). The result

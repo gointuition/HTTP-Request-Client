@@ -17,11 +17,55 @@ import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.Map;
 
 public class HttpClient {
 
     private static volatile boolean initialized = false;
     private static final int BUFFER_SIZE = 1024 * 1024; // 1 MB, same as nodejs/python
+
+    /**
+     * Streaming response callbacks.
+     *
+     * Passing a listener to request() or startRequest() streams the response:
+     * the decoded body is handed to onData chunk by chunk, and the response JSON
+     * then reports "streamed": 1 with an empty payload. Without a listener the
+     * library collects the body itself and the JSON carries it in
+     * response.payload.
+     *
+     * The callbacks run on the thread that receives the bytes (the connection
+     * reader), not on the calling thread, so implementations must be thread safe
+     * and must not call back into this library.
+     *
+     * All three are mandatory: a listener that skipped onData would leave the
+     * body with neither a consumer nor a place in the buffered response, so the
+     * compiler rejects an implementation that does not provide them.
+     */
+    public interface ResponseListener {
+
+        /**
+         * Response headers, ":status" first, delivered once before the body.
+         *
+         * @param headers Header name to value, in wire order.
+         */
+        void onHeaders(Map<String, String> headers);
+
+        /**
+         * One decoded body chunk.
+         *
+         * @param chunk The decoded bytes, owned by the caller (copied per call).
+         * @return true to stop the response, false to keep reading.
+         */
+        boolean onData(byte[] chunk);
+
+        /**
+         * Delivered once per attempt, after the last chunk.
+         *
+         * @param errorCode null when the body ended cleanly, otherwise the code.
+         * @param errorMessage null when the body ended cleanly, otherwise the text.
+         */
+        void onComplete(String errorCode, String errorMessage);
+    }
 
     // ── Native method declarations (implemented in HttpClient.c) ──────────
 
@@ -67,6 +111,27 @@ public class HttpClient {
      *                    String data (response JSON when done) }.
      */
     private static native Object[] nativePollRequest(long requestId);
+
+    /**
+     * Send a blocking request whose body is streamed to the listener.
+     * Corresponds to C: handleRequest(const char*, const ResponseStream*).
+     *
+     * @param requestJson JSON string describing the request config.
+     * @param listener Streaming callbacks, kept alive for the whole exchange.
+     * @return Response JSON string, or null on failure.
+     */
+    private static native String nativeRequestStreaming(String requestJson, ResponseListener listener);
+
+    /**
+     * Start a non-blocking request whose body is streamed to the listener.
+     * The listener outlives this call: it runs on the connection reader thread
+     * until the id is reaped by nativePollRequest.
+     *
+     * @param requestJson JSON string describing the request config.
+     * @param listener Streaming callbacks.
+     * @return Positive request id to poll, or 0 on failure.
+     */
+    private static native long nativeStartRequestStreaming(String requestJson, ResponseListener listener);
 
     // ── Library loading ──────────────────────────────────────────────────
 
@@ -241,6 +306,34 @@ public class HttpClient {
     }
 
     /**
+     * Send an HTTP request with a streamed response.
+     *
+     * The body goes to {@code listener.onData} chunk by chunk instead of being
+     * buffered, so the returned JSON reports "streamed": 1 with an empty
+     * payload. The callbacks run on the connection reader thread.
+     *
+     * @param requestJson JSON string describing the request config.
+     * @param listener Streaming callbacks, all three of them (see
+     *                 {@link ResponseListener}); null behaves like request(String).
+     * @return Response JSON string from native library.
+     * @throws RuntimeException if the request fails.
+     */
+    public static String request(String requestJson, ResponseListener listener) {
+        if (!initialized) {
+            init();
+        }
+        if (listener == null) {
+            return request(requestJson);
+        }
+
+        String result = nativeRequestStreaming(requestJson, listener);
+        if (result == null) {
+            throw new RuntimeException("handleRequest failed (native returned null)");
+        }
+        return result;
+    }
+
+    /**
      * Poll result for a non-blocking request.
      */
     public static final class PollResult {
@@ -279,6 +372,24 @@ public class HttpClient {
     }
 
     /**
+     * Start a non-blocking request with a streamed response. The listener runs
+     * on the connection reader thread until pollRequest() reaps the id.
+     *
+     * @param requestJson JSON string describing the request config.
+     * @param listener Streaming callbacks; null behaves like startRequest(String).
+     * @return Positive request id, or 0 on failure.
+     */
+    public static long startRequest(String requestJson, ResponseListener listener) {
+        if (!initialized) {
+            init();
+        }
+        if (listener == null) {
+            return startRequest(requestJson);
+        }
+        return nativeStartRequestStreaming(requestJson, listener);
+    }
+
+    /**
      * Poll a non-blocking request started with startRequest.
      *
      * @param requestId The id returned by startRequest.
@@ -309,7 +420,22 @@ public class HttpClient {
      * @throws RuntimeException if the request fails to start or times out.
      */
     public static String requestNonBlocking(String requestJson, long pollIntervalMs) {
-        long id = startRequest(requestJson);
+        return requestNonBlocking(requestJson, pollIntervalMs, null);
+    }
+
+    /**
+     * Convenience: start a non-blocking request with a streamed response and
+     * wait (poll) until it completes.
+     *
+     * @param requestJson JSON string describing the request config.
+     * @param pollIntervalMs Poll interval in milliseconds.
+     * @param listener Streaming callbacks, or null for a buffered response.
+     * @return Response JSON string.
+     * @throws RuntimeException if the request fails to start or times out.
+     */
+    public static String requestNonBlocking(String requestJson, long pollIntervalMs,
+                                           ResponseListener listener) {
+        long id = startRequest(requestJson, listener);
         if (id == 0) {
             throw new RuntimeException("failed to start non-blocking request");
         }

@@ -5,6 +5,7 @@
 #include "CompressHandler.h"
 
 #include <string.h>
+#include <strings.h>
 #include <zlib.h>
 #include <stdio.h>
 
@@ -68,6 +69,13 @@ HuffmanNode *huffmanRoot = NULL;
 
 static HuffmanNode* getHuffmanNode(int index);
 static char* huffmanDecodeTree(const uint8_t *src, size_t srcLen, HuffmanNode *root);
+
+static int initStreamDecompressor(StreamDecompressor *decompressor, ContentEncoding encoding);
+static int feedZlib(StreamDecompressor *decompressor, const unsigned char *data, size_t len, BodyConsumer consume, void *ctx);
+static int openDeflateWindow(StreamDecompressor *decompressor, const unsigned char *data, size_t len);
+static int isZlibHeader(const unsigned char *data);
+static int feedBrotli(StreamDecompressor *decompressor, const unsigned char *data, size_t len, BodyConsumer consume, void *ctx);
+static int feedZstd(StreamDecompressor *decompressor, const unsigned char *data, size_t len, BodyConsumer consume, void *ctx);
 
 size_t hpackHuffmanEncode(const char *input, size_t inputLen, unsigned char *output) {
     size_t outputLen = 0;
@@ -317,6 +325,18 @@ char* hpackDecodeString(unsigned char *payload, size_t *pos, size_t length) {
 
     *pos += strLen;
     return result;
+}
+
+ContentEncoding detectContentEncoding(const ResponseHeader *headers, size_t numHeaders) {
+    for (size_t i = 0; i < numHeaders; i++) {
+        if (strcasecmp(headers[i].name, "content-encoding") != 0) { continue; }
+        if (strcasecmp(headers[i].value, "gzip") == 0) { return ENCODING_GZIP; }
+        if (strcasecmp(headers[i].value, "br") == 0) { return ENCODING_BROTLI; }
+        if (strcasecmp(headers[i].value, "deflate") == 0) { return ENCODING_DEFLATE; }
+        if (strcasecmp(headers[i].value, "zstd") == 0) { return ENCODING_ZSTD; }
+        break;
+    }
+    return ENCODING_IDENTITY;
 }
 
 DecompressedObj* decompress_GZip(unsigned char *combinedPayload, size_t combinedPayloadSize) {
@@ -717,6 +737,193 @@ DecompressedObj* decompress_Zstd(unsigned char *combinedPayload, size_t combined
     decompressedObj -> decompressedPayloadSize = result;
 
     return decompressedObj;
+}
+
+// ─── incremental decoding (streaming responses) ───
+
+#define STREAM_DECOMPRESS_CHUNK (32 * 1024)
+
+struct StreamDecompressor {
+    ContentEncoding encoding;
+    union {
+        z_stream zlib;
+        BrotliDecoderState *brotli;
+        ZSTD_DCtx *zstd;
+    } u;
+    unsigned char *out;
+    int windowPending;   // deflate: the inflate window waits for the first body bytes
+};
+
+// NULL for identity; also NULL when the decoder could not be created.
+StreamDecompressor* buildStreamDecompressor(ContentEncoding encoding) {
+    if (encoding == ENCODING_IDENTITY) { return NULL; }
+
+    StreamDecompressor *decompressor = calloc(1, sizeof(StreamDecompressor));
+    if (decompressor == NULL) { return NULL; }
+    decompressor -> out = malloc(STREAM_DECOMPRESS_CHUNK);
+    if (decompressor -> out == NULL) {
+        free(decompressor);
+        return NULL;
+    }
+
+    const int initialized = initStreamDecompressor(decompressor, encoding);
+    if (!initialized) {
+        LOG("ERROR", "failed to initialize the streaming decoder (%d)", encoding);
+        free(decompressor -> out);
+        free(decompressor);
+        return NULL;
+    }
+    return decompressor;
+}
+
+static int initStreamDecompressor(StreamDecompressor *decompressor, ContentEncoding encoding) {
+    decompressor -> encoding = encoding;
+
+    if (encoding == ENCODING_GZIP) {
+        const int rc = inflateInit2(&decompressor -> u.zlib, 16 + MAX_WBITS);
+        return rc == Z_OK;
+    }
+    if (encoding == ENCODING_DEFLATE) {
+        // The wrapper is only visible once the body starts, so the inflate
+        // window is chosen on the first chunk (see openDeflateWindow).
+        decompressor -> windowPending = 1;
+        return 1;
+    }
+    if (encoding == ENCODING_BROTLI) {
+        decompressor -> u.brotli = BrotliDecoderCreateInstance(NULL, NULL, NULL);
+        return decompressor -> u.brotli != NULL;
+    }
+
+    decompressor -> u.zstd = ZSTD_createDCtx();
+    return decompressor -> u.zstd != NULL;
+}
+
+// A NULL decompressor is a pass-through, so callers have a single entry point.
+int feedStreamDecompressor(StreamDecompressor *decompressor, const unsigned char *data, size_t len,
+                           BodyConsumer consume, void *ctx) {
+    if (decompressor == NULL) {
+        const int aborted = consume(ctx, data, len);
+        return aborted == 0 ? 1 : 0;
+    }
+    if (decompressor -> encoding == ENCODING_BROTLI) { return feedBrotli(decompressor, data, len, consume, ctx); }
+    if (decompressor -> encoding == ENCODING_ZSTD) { return feedZstd(decompressor, data, len, consume, ctx); }
+    return feedZlib(decompressor, data, len, consume, ctx);
+}
+
+static int feedZlib(StreamDecompressor *decompressor, const unsigned char *data, size_t len,
+                    BodyConsumer consume, void *ctx) {
+    if (decompressor -> windowPending) {
+        const int opened = openDeflateWindow(decompressor, data, len);
+        if (!opened) { return -1; }
+    }
+
+    z_stream *zs = &decompressor -> u.zlib;
+    zs -> next_in = (Bytef *) data;
+    zs -> avail_in = (uInt) len;
+
+    while (zs -> avail_in > 0) {
+        zs -> next_out = decompressor -> out;
+        zs -> avail_out = STREAM_DECOMPRESS_CHUNK;
+
+        const int status = inflate(zs, Z_NO_FLUSH);
+        const size_t produced = STREAM_DECOMPRESS_CHUNK - zs -> avail_out;
+        if (produced > 0) {
+            const int aborted = consume(ctx, decompressor -> out, produced);
+            if (aborted != 0) { return 0; }
+        }
+        if (status == Z_STREAM_END) { return 1; }
+        if (status != Z_OK) {
+            LOG("ERROR", "(stream) inflate failed: %d", status);
+            return -1;
+        }
+    }
+    return 1;
+}
+
+// Picks the inflate window from the first body bytes: "deflate" is a zlib stream
+// in theory and a raw one in practice, so a zlib header (and anything too short
+// to judge, which zlib's own detection resolves on a later chunk) takes the
+// wrapper-aware window while everything else is decoded raw.
+static int openDeflateWindow(StreamDecompressor *decompressor, const unsigned char *data, size_t len) {
+    decompressor -> windowPending = 0;
+
+    const int rawDeflate = len >= 2 && !isZlibHeader(data);
+    const int rc = inflateInit2(&decompressor -> u.zlib, rawDeflate ? -MAX_WBITS : MAX_WBITS + 32);
+    if (rc != Z_OK) {
+        LOG("ERROR", "(stream) inflateInit2 failed: %d", rc);
+        return 0;
+    }
+    return 1;
+}
+
+// RFC 1950 header: CM = 8 and the 16-bit header divisible by 31.
+static int isZlibHeader(const unsigned char *data) {
+    const int compressionMethod = data[0] & 0x0f;
+    const int headerCheck = ((data[0] << 8) | data[1]) % 31;
+    return compressionMethod == 8 && headerCheck == 0;
+}
+
+static int feedBrotli(StreamDecompressor *decompressor, const unsigned char *data, size_t len,
+                      BodyConsumer consume, void *ctx) {
+    const uint8_t *nextIn = data;
+    size_t availableIn = len;
+
+    while (availableIn > 0) {
+        uint8_t *nextOut = decompressor -> out;
+        size_t availableOut = STREAM_DECOMPRESS_CHUNK;
+
+        const BrotliDecoderResult result = BrotliDecoderDecompressStream(
+            decompressor -> u.brotli, &availableIn, &nextIn, &availableOut, &nextOut, NULL);
+        const size_t produced = STREAM_DECOMPRESS_CHUNK - availableOut;
+        if (produced > 0) {
+            const int aborted = consume(ctx, decompressor -> out, produced);
+            if (aborted != 0) { return 0; }
+        }
+        if (result == BROTLI_DECODER_RESULT_ERROR) {
+            LOG("ERROR", "(stream) brotli inflate failed");
+            return -1;
+        }
+        if (result == BROTLI_DECODER_RESULT_SUCCESS) { return 1; }
+        const int stalled = produced == 0;
+        if (stalled) { return -1; }
+    }
+    return 1;
+}
+
+static int feedZstd(StreamDecompressor *decompressor, const unsigned char *data, size_t len,
+                    BodyConsumer consume, void *ctx) {
+    ZSTD_inBuffer input = { data, len, 0 };
+
+    while (input.pos < input.size) {
+        ZSTD_outBuffer output = { decompressor -> out, STREAM_DECOMPRESS_CHUNK, 0 };
+
+        const size_t remaining = ZSTD_decompressStream(decompressor -> u.zstd, &output, &input);
+        if (output.pos > 0) {
+            const int aborted = consume(ctx, decompressor -> out, output.pos);
+            if (aborted != 0) { return 0; }
+        }
+        if (ZSTD_isError(remaining)) {
+            LOG("ERROR", "(stream) zstd inflate failed: %s", ZSTD_getErrorName(remaining));
+            return -1;
+        }
+        const int stalled = output.pos == 0;
+        if (stalled) { break; }
+    }
+    return 1;
+}
+
+void freeStreamDecompressor(StreamDecompressor *decompressor) {
+    if (decompressor == NULL) { return; }
+    if (decompressor -> encoding == ENCODING_GZIP || decompressor -> encoding == ENCODING_DEFLATE) {
+        // a deflate decoder that never saw a body byte was never initialised
+        if (!decompressor -> windowPending) { inflateEnd(&decompressor -> u.zlib); }
+    } else if (decompressor -> encoding == ENCODING_BROTLI) {
+        BrotliDecoderDestroyInstance(decompressor -> u.brotli);
+    } else {
+        ZSTD_freeDCtx(decompressor -> u.zstd);
+    }
+    free(decompressor -> out);
+    free(decompressor);
 }
 
 // base64 encode binary data

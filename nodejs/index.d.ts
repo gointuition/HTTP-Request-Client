@@ -27,6 +27,8 @@ export interface HttpResponse {
     statusCode?: number;
     headers?: string[];
     payload?: string;
+    /** 1 when the body went to the streaming callbacks (payload stays empty), 0 when buffered. */
+    streamed?: number;
     contentEncoding?: string;
     payloadEncoding?: string;
     payloadSize?: number;
@@ -60,11 +62,32 @@ export interface RequestResponse {
     error?: string;
 }
 
+/**
+ * Streaming callbacks: the decoded body goes to onData chunk by chunk and the
+ * response JSON then reports "streamed": 1 with an empty payload. The bundle is
+ * all or nothing — a hole in it would leave the body with neither a consumer nor
+ * a place in the response, so a partial one throws before the request goes out.
+ * Without a bundle the library collects the body itself and the JSON carries it
+ * in response.payload.
+ *
+ * Only requestAsync() and requestNonBlocking() can stream: the synchronous
+ * request() blocks the event loop, so no callback could ever be delivered.
+ */
+export interface StreamCallbacks {
+    /** Response headers as an object (":status" first), delivered once. */
+    onHeaders: (headers: Record<string, string>) => void;
+    /** One decoded body chunk; return true to stop the response. */
+    onData: (chunk: Buffer) => boolean | void;
+    /** Delivered once: null when the body ended cleanly, otherwise the error. */
+    onComplete: (error: HttpError | null) => void;
+}
+
 export class HttpClient {
     init(): this;
     request(config: HttpRequestConfig | string): HttpResult;
-    requestAsync(config: HttpRequestConfig | string): Promise<string>;
-    requestNonBlocking(config: HttpRequestConfig | string, pollIntervalMs?: number): Promise<string>;
+    requestAsync(config: HttpRequestConfig | string, callbacks?: StreamCallbacks): Promise<string>;
+    requestNonBlocking(config: HttpRequestConfig | string, pollIntervalMs?: number,
+                       callbacks?: StreamCallbacks): Promise<string>;
     cleanup(): void;
 }
 

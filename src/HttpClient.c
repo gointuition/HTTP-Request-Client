@@ -148,11 +148,33 @@ void cleanupEnv(void) {
 //   blocking ("non-blocking": 0): the whole exchange finishes before returning;
 //   handleResponse() serializes the already-complete basket and frees it (call
 //   it exactly once).
-intptr_t handleRequest(const char *requestJSONString) {
+// Every response travels the streaming funnel; `stream` only decides who
+// receives the body: NULL installs the library's own collector, which
+// accumulates the decoded body into the basket payload so handleResponse()
+// returns the complete response, while a contract gets it chunk by chunk and
+// the collected JSON then reports "streamed": 1 with no payload.
+intptr_t handleRequest(const char *requestJSONString, const ResponseStream *stream) {
     Basket *basket = buildBasket(requestJSONString);
     if (basket == NULL) {
         return 0;
     }
+
+    // the contract is all or nothing: a partial one would leave the body with
+    // neither a consumer nor a place in the basket, so no request runs with it
+    const ResponseStream *contract = stream;
+    if (contract != NULL && isCompleteResponseStream(contract) == 0) {
+        LOG("ERROR", "incomplete ResponseStream, the request is not sent");
+        if (basket -> error.code == NULL) {
+            basket -> error = ERR_RESPONSE_STREAM_INCOMPLETE_CONTRACT;
+        }
+        contract = NULL;
+    }
+
+    basket -> sink = buildResponseSink(basket, contract);
+    if (basket -> sink == NULL) {
+        basket -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+    }
+
     if (basket -> nonBlocking) {
         return handleRequestAsync(basket);
     }
@@ -301,6 +323,7 @@ void executeRequest(Basket *basket, Stream **outStream, int waitForResponse) {
         handleHttp2Request(basket);
     }
     if (basket -> error.code != NULL) {
+        completeResponseSink(stream);
         unregisterStream(basket, stream);
         return;
     }
@@ -346,6 +369,7 @@ static void prepareRetry(Basket *basket) {
     if (requiresHttp11Downgrade(basket -> error)) {
         basket -> forceHttp11 = 1;
     }
+    prepareStreamRetry(basket);
     basket -> session -> goingAway = 1;
     basket -> session = NULL;
     basket -> error = ERR_NONE;
@@ -435,6 +459,10 @@ static void handleResponseAsync(Basket *basket, char *dest, int capacity, int *o
     } else if (stream != NULL) {
         pthread_mutex_lock(&stream -> lock);
         const int ended = stream -> isEnded;
+        // A streaming response is bounded by its idle time, not by the whole
+        // transfer time.
+        const time_t lastActivity = isResponseStreaming(stream) && stream -> lastActivityTime > startTime
+                                    ? stream -> lastActivityTime : startTime;
         pthread_mutex_unlock(&stream -> lock);
 
         if (ended) {
@@ -444,7 +472,7 @@ static void handleResponseAsync(Basket *basket, char *dest, int capacity, int *o
             // Still in flight: check the reading timeout.
             const int timeoutMs = basket -> responseReadingTimeoutInMilliseconds;
             const time_t now = time(NULL);
-            const long elapsedMs = (long) (now - startTime) * 1000;
+            const long elapsedMs = (long) (now - lastActivity) * 1000;
             if (timeoutMs > 0 && elapsedMs > timeoutMs) {
                 LOG("ERROR", "async request %ld timed out after %ldms", requestId, elapsedMs);
                 basket -> error = ERR_RESPONSE_NO_CONTENT_AFTER_READING_TIMEOUT;

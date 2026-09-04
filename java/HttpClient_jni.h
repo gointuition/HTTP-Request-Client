@@ -49,6 +49,22 @@ JNIEXPORT jlong JNICALL Java_HttpClient_nativeStartRequest
 JNIEXPORT jobjectArray JNICALL Java_HttpClient_nativePollRequest
   (JNIEnv *, jclass, jlong);
 
+/*
+ * Class:     HttpClient
+ * Method:    nativeRequestStreaming
+ * Signature: (Ljava/lang/String;LHttpClient/ResponseListener;)Ljava/lang/String;
+ */
+JNIEXPORT jstring JNICALL Java_HttpClient_nativeRequestStreaming
+  (JNIEnv *, jclass, jstring, jobject);
+
+/*
+ * Class:     HttpClient
+ * Method:    nativeStartRequestStreaming
+ * Signature: (Ljava/lang/String;LHttpClient/ResponseListener;)J
+ */
+JNIEXPORT jlong JNICALL Java_HttpClient_nativeStartRequestStreaming
+  (JNIEnv *, jclass, jstring, jobject);
+
 #ifdef __cplusplus
 }
 #endif

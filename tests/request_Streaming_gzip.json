@@ -1,0 +1,22 @@
+{
+  "method": "GET",
+  // always answers with "content-encoding: gzip", so the streaming decoder runs
+  "url": "https://httpbin.org/gzip",
+  "connectTimeoutInMilliseconds": 5000,
+  "responseReadingTimeoutInMilliseconds": 30000,
+  // gzip only
+  "decompress": 1,
+  "log": 1,
+  "non-blocking": 0,
+  "headers": {
+    "host": "httpbin.org",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "accept": "*/*",
+    "accept-encoding": "gzip",
+    "accept-language": "en-US,en;q=0.9"
+  },
+  "session": {
+    "clientHelloId": "hellochrome_auto",
+    "expirationInMilliseconds": 300000
+  }
+}

@@ -172,6 +172,7 @@ over a single HTTP connection (each on its own stream).
 
 **Parameters:**
 - `config` (Object | string): Request configuration object or JSON string
+- `callbacks` (StreamCallbacks, optional): `onHeaders` / `onData` / `onComplete` — all three together or none, see [Streaming response](#streaming-response)
 
 **Returns:**
 - `Promise<string>`: Resolves with the response JSON string
@@ -179,6 +180,42 @@ over a single HTTP connection (each on its own stream).
 ### `httpClient.cleanup()`
 
 Cleanup resources and release memory.
+
+### Streaming response
+
+`requestAsync(config, callbacks)` and `requestNonBlocking(config, pollIntervalMs, callbacks)`
+take a callback bundle. With one, the decoded body is handed to `onData`
+chunk by chunk instead of being buffered, and the resolved JSON reports
+`"streamed": 1` with an empty `payload`. Without one, the library collects the
+body itself and the JSON carries it in `response.payload`. The bundle is all or
+nothing: a partial one throws before the request goes out, since a missing
+`onData` would leave the body with neither a consumer nor a place in the result.
+
+```js
+let received = 0;
+await httpClient.requestAsync(config, {
+    onHeaders: (headers) => console.log(headers[':status']),
+    // return true to tear the response down (RST_STREAM); the JSON then reports 3-0014
+    onData: (chunk) => { received += chunk.length; return received >= 64 * 1024; },
+    onComplete: (error) => console.log(error ? error.code : 'clean'),
+});
+```
+
+| Callback | Signature | Notes |
+|----------|-----------|-------|
+| `onHeaders` | `(headers: Record<string, string>) => void` | Once per attempt, before the body, `:status` first |
+| `onData` | `(chunk: Buffer) => boolean \| void` | One decoded chunk (gzip / deflate / Brotli / Zstd already inflated) |
+| `onComplete` | `(error: { code, message } \| null) => void` | Once per attempt, after the last chunk; `null` when the body ended cleanly |
+
+The C core runs the contract on the connection reader thread, so the addon posts
+each event to the JS thread through a threadsafe function. A JS callback therefore
+cannot hand its verdict back synchronously: `onData` returning `true` is honoured
+by the **next** chunk. Events also travel independently of the returned Promise,
+so wait for `onComplete` before judging a transfer.
+
+The synchronous `request(config)` blocks the event loop for the whole exchange,
+which leaves no thread to deliver callbacks on — it always answers with a
+buffered response.
 
 ## Request Configuration
 
@@ -227,6 +264,7 @@ interface HttpResult {
         statusCode?: number;
         headers?: string[];
         payload?: string;
+        streamed?: number;      // 1 when the body went to the callbacks, 0 when buffered
         contentEncoding?: string;
         payloadEncoding?: string;
         payloadSize?: number;
@@ -248,6 +286,9 @@ interface HttpResult {
 ```bash
 # Quick test
 node test.js
+
+# Streaming callbacks, abort, incremental gzip decode
+node test_streaming.js
 
 # Full example
 node example.js

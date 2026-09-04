@@ -55,7 +55,7 @@ int main(int argc, char *argv[]) {
 
     // step 1: run the blocking request and collect the completed result
     int actualLen = 0;
-    const intptr_t handle = handleRequest(requestStr);
+    const intptr_t handle = handleRequest(requestStr, NULL);
     char *basketStr = NULL;
     if (handle != 0) {
         basketStr = collectResponse(handle, &actualLen);

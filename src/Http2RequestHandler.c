@@ -225,6 +225,136 @@ void sendDataFrame(Basket *basket) {
 }
 
 /**
++-----------------------------------------------+
+|                 Length (24)                   |
++---------------+---------------+---------------+
+|   Type (8)    |   Flags (8)   |
++-+-------------+---------------+---------------+
+|R|                 Stream Identifier (31)      |
++=+=============================================+
+|                   Frame Payload (*)           |
++-----------------------------------------------+
+*/
+void sendControlFrame(Session *session, const unsigned char *frame, size_t len) {
+    pthread_mutex_lock(&session -> writeMutex);
+    const int written = sslWriteAllEx(session -> ssl, session -> nonBlocking, 5000, frame, len);
+    pthread_mutex_unlock(&session -> writeMutex);
+
+    if (written != 1) {
+        LOG("WARN", "SSL_write HTTP/2 control frame 0x%02x failed", frame[3]);
+    }
+}
+
+/*
+WINDOW_UPDATE (type 0x8), payload is a 31-bit unsigned Window Size Increment
++-----------------------------------------------+
+|                   Window Size Increment (31)  |
++-----------------------------------------------+
+*/
+static void fillWindowUpdateFrame(unsigned char *frame, uint32_t streamId, uint32_t increment) {
+    const unsigned char header[5] = {0, 0, 4, 0x8, 0};
+    memcpy(frame, header, sizeof(header));
+    frame[5] = (streamId >> 24) & 0x7F;
+    frame[6] = (streamId >> 16) & 0xFF;
+    frame[7] = (streamId >> 8) & 0xFF;
+    frame[8] = streamId & 0xFF;
+    frame[9] = (increment >> 24) & 0x7F;
+    frame[10] = (increment >> 16) & 0xFF;
+    frame[11] = (increment >> 8) & 0xFF;
+    frame[12] = increment & 0xFF;
+}
+
+void sendWindowUpdateFrame(Session *session, uint32_t streamId, uint32_t increment) {
+    unsigned char frame[13];
+    fillWindowUpdateFrame(frame, streamId, increment);
+    sendControlFrame(session, frame, sizeof(frame));
+}
+
+/*
+RST_STREAM (type 0x3), payload is a 32-bit error code (0x8 = CANCEL: the
+client is no longer interested in the stream)
++-----------------------------------------------+
+|                        Error Code (32)        |
++-----------------------------------------------+
+*/
+static void fillRSTStreamFrame(unsigned char *frame, uint32_t streamId) {
+    const unsigned char header[9] = {0, 0, 4, 0x3, 0, 0, 0, 0, 0};
+    memcpy(frame, header, sizeof(header));
+    frame[5] = (streamId >> 24) & 0x7F;
+    frame[6] = (streamId >> 16) & 0xFF;
+    frame[7] = (streamId >> 8) & 0xFF;
+    frame[8] = streamId & 0xFF;
+    frame[9] = 0;
+    frame[10] = 0;
+    frame[11] = 0;
+    frame[12] = 0x8;
+}
+
+void sendRSTStreamFrame(Session *session, uint32_t streamId) {
+    unsigned char frame[13];
+    fillRSTStreamFrame(frame, streamId);
+    sendControlFrame(session, frame, sizeof(frame));
+}
+
+// ─── reader-thread write queue (coalesced batch-end writes) ───
+
+// Appends one frame's raw wire bytes to the queue. On allocation failure the
+// frame falls back to an immediate write so flow control never stalls.
+void queueControlFrame(Session *session, const unsigned char *frame, size_t len) {
+    if (session -> pendingWireSize + len > session -> pendingWireCapacity) {
+        size_t capacity = session -> pendingWireCapacity ? session -> pendingWireCapacity : 256;
+        while (capacity < session -> pendingWireSize + len) { capacity *= 2; }
+        unsigned char *grown = realloc(session -> pendingWire, capacity);
+        if (grown == NULL) {
+            LOG("ERROR", "control frame queue allocation failed; writing immediately");
+            sendControlFrame(session, frame, len);
+            return;
+        }
+        session -> pendingWire = grown;
+        session -> pendingWireCapacity = capacity;
+    }
+    memcpy(session -> pendingWire + session -> pendingWireSize, frame, len);
+    session -> pendingWireSize += len;
+}
+
+void queueWindowUpdateFrame(Session *session, uint32_t streamId, uint32_t increment) {
+    unsigned char frame[13];
+    fillWindowUpdateFrame(frame, streamId, increment);
+    queueControlFrame(session, frame, sizeof(frame));
+}
+
+void queueRSTStreamFrame(Session *session, uint32_t streamId) {
+    unsigned char frame[13];
+    fillRSTStreamFrame(frame, streamId);
+    queueControlFrame(session, frame, sizeof(frame));
+}
+
+// Runs once per read batch on the reader thread: owed connection credit joins
+// the queue first, then the whole queue leaves through a single serialized
+// write (one burst instead of one write per frame).
+void flushReaderWrites(Session *session) {
+    if (session -> connWindowFlushDue) {
+        session -> connWindowFlushDue = 0;
+        if (session -> pendingConnWindow > 0) {
+            queueWindowUpdateFrame(session, 0, session -> pendingConnWindow);
+            session -> pendingConnWindow = 0;
+        }
+    }
+    if (session -> pendingWireSize == 0) { return; }
+
+    const size_t wireSize = session -> pendingWireSize;
+    session -> pendingWireSize = 0;
+
+    pthread_mutex_lock(&session -> writeMutex);
+    const int written = sslWriteAllEx(session -> ssl, session -> nonBlocking, 5000, session -> pendingWire, wireSize);
+    pthread_mutex_unlock(&session -> writeMutex);
+
+    if (written != 1) {
+        LOG("WARN", "SSL_write HTTP/2 queued control frames failed");
+    }
+}
+
+/**
  * Streams identifiers
  * stream ids are 31-bit integers
  * streams initiated by the client use odd-numbered ids

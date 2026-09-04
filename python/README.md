@@ -74,6 +74,7 @@ Send an HTTP request.
 
 **Parameters:**
 - `config` (dict | str): Request configuration dict or JSON string
+- `on_headers`, `on_data`, `on_complete` (callable, optional): streaming callbacks — all three together or none, see [Streaming response](#streaming-response)
 
 **Returns:**
 - `str`: Response JSON string from native library
@@ -81,10 +82,47 @@ Send an HTTP request.
 **Throws:**
 - `RuntimeError`: If the native call fails
 - `TypeError`: If config is not a dict or string
+- `ValueError`: If only some of the streaming callbacks are given
 
 ### `httpClient.cleanup()`
 
 Cleanup resources and release memory.
+
+### Streaming response
+
+`request`, `start_request` and `request_non_blocking` all take the same three
+callbacks. Giving all three streams the response: the decoded body
+goes to `on_data` chunk by chunk instead of being buffered, and the returned JSON
+reports `"streamed": 1` with an empty `payload`. Passing none keeps the library's
+own collector, and the JSON carries the whole body in `response.payload`. Giving
+only some raises `ValueError` before the request goes out — a missing `on_data`
+would leave the body with neither a consumer nor a place in the result.
+
+```python
+received = 0
+
+def on_data(chunk):
+    global received
+    received += len(chunk)
+    # returning True tears the response down (RST_STREAM); the JSON then reports 3-0014
+    return received >= 64 * 1024
+
+result = httpClient.request(config,
+                            on_headers=lambda headers: print(headers[":status"]),
+                            on_data=on_data,
+                            on_complete=lambda error: print(error or "clean"))
+```
+
+| Callback | Signature | Notes |
+|----------|-----------|-------|
+| `on_headers` | `(headers: dict[str, str]) -> None` | Once per attempt, before the body, `:status` first |
+| `on_data` | `(chunk: bytes) -> bool` | One decoded chunk (gzip / deflate / Brotli / Zstd already inflated), copied per call so it is safe to keep |
+| `on_complete` | `(error: dict \| None) -> None` | Once per attempt, after the last chunk; `None` when the body ended cleanly, else `{"code", "message"}` |
+
+The callbacks run on the thread that receives the bytes — the connection reader —
+not on the calling thread; cffi takes the GIL for each call. They must stay short
+and must not call back into this library. An exception raised inside one stops the
+response and is re-raised by the call that returns the result.
 
 ## Request Configuration
 
@@ -110,6 +148,9 @@ Optional uTLS-style identifier that pins the TLS/HTTP wire fingerprint. When omi
 ```bash
 # Quick test
 python python/test.py
+
+# Streaming callbacks, abort, incremental gzip decode
+python python/test_streaming.py
 
 # Full example
 python python/example.py

@@ -75,6 +75,8 @@ const Error ERR_RESPONSE_ZSTD_INFLATE_FAILED                        = { "3-0010"
 const Error ERR_RESPONSE_INFLATE_UNKNOWN_ERROR                      = { "3-0011", "Response inflate unknown error."};
 const Error ERR_RESPONSE_RST_STREAM_ERROR                           = { "3-0012", "Response RST_STREAM unknown error."};
 const Error ERR_RESPONSE_READING_HTTP11_FAILED                      = { "3-0013", "Reading/parsing http/1.1 response failed."};
+const Error ERR_RESPONSE_STREAM_ABORTED_BY_CONSUMER                 = { "3-0014", "Response streaming aborted by the consumer."};
+const Error ERR_RESPONSE_STREAM_INCOMPLETE_CONTRACT                 = { "3-0015", "Response streaming contract requires onHeaders, onData and onComplete."};
 
 // Proxy errors
 const Error ERR_PROXY_HOST_RESOLVE_FAILED                           = { "4-0001", "Proxy host resolve failed."};

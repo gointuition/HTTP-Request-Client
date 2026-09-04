@@ -9,6 +9,7 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 - **TLS 1.3** — session resumption with `pre_shared_key` (NewSessionTicket callback)
 - **TLS fingerprint** — GREASE, ECH, ALPS, cert compression (Brotli), signature algorithms alignment
 - **Compression** — gzip, deflate, Brotli, Zstd response decompression
+- **Streaming response** — every body travels one streaming funnel: an optional `ResponseStream` on `handleRequest` hands it to `onHeaders` / `onData` / `onComplete` callbacks chunk by chunk (incrementally decoded), never buffering it in the basket, and supports consumer-initiated abort plus idle-based read timeouts. Without a contract the library consumes the same funnel with a collector of its own, so a buffered response is a streamed one nobody watched. All three bindings expose the choice
 - **Proxy** — HTTPS CONNECT tunnel with authorization
 - **Session pool** — thread-safe connection reuse with configurable expiration (up to 1024 concurrent sessions); concurrent same-host requests share one multiplexed connection
 - **Cross-language** — native bindings for [Node.js](nodejs/) (N-API), [Python](python/) (cffi), [Java](java/) (JNI)
@@ -30,6 +31,7 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 ├─────────────────────────────────────────────────┤
 │ SSLHandler (BoringSSL) │ CompressHandler        │
 │ BrowserHandler (Chrome)│ UrlParser / File       │
+│ ResponseStream (streaming body funnel)          │
 ├─────────────────────────────────────────────────┤
 │ BoringSSL │ Brotli │ Zstd │ Jansson │ zlib      │
 └─────────────────────────────────────────────────┘
@@ -40,7 +42,8 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 ```
 ├── include/            # Public headers
 │   ├── HttpClient.h    # C API entry point
-│   ├── Basket.h        # Request/Response/Session data structures
+│   ├── Basket.h         # Request/Response/Session data structures
+│   ├── ResponseStream.h # Streaming callbacks (ResponseStream contract)
 │   ├── SSLHandler.h    # TLS layer
 │   ├── Session.h       # Connection session pool
 │   ├── Compat.h        # POSIX <-> Winsock2 networking shim
@@ -54,6 +57,7 @@ A high-performance HTTP/2 client library written in C, with TLS 1.3 session resu
 │   ├── Http11RequestHandler.c # HTTP/1.1 request building/sending + exchange orchestration
 │   ├── Http11ResponseHandler.c # HTTP/1.1 response parsing (chunked / content-length / until-close)
 │   ├── CompressHandler.c # gzip/deflate/brotli/zstd
+│   ├── ResponseStream.c # Body funnel: decode, then deliver to callbacks or collect
 │   └── ...
 ├── tests/              # C test programs
 ├── third_party/        # Git submodules
@@ -176,7 +180,11 @@ void initialiseEnv(void);
 //      multiple threads -- it may be called concurrently, and same-host
 //      requests share one HTTP/2 connection and are multiplexed on separate
 //      streams.
-intptr_t handleRequest(const char *requestJSONString);
+//    `stream` is optional and selects how the body arrives: NULL lets the
+//    library collect the whole response itself (what the language bindings
+//    pass); a ResponseStream contract streams it to callbacks chunk by chunk
+//    (see "Streaming response"), and must carry all three of them.
+intptr_t handleRequest(const char *requestJSONString, const ResponseStream *stream);
 
 // 3. Cleanup (call once at shutdown)
 void cleanupEnv(void);
@@ -285,7 +293,7 @@ int main() {
 
     // Step 1: run the request in blocking mode; the returned basket handle
     // already points at the finished result
-    intptr_t handle = handleRequest(request);
+    intptr_t handle = handleRequest(request, NULL);
     if (handle != 0) {
         // Step 2: collect the result into a caller-owned buffer
         int capacity = 1024 * 1024;
@@ -314,6 +322,50 @@ int main() {
     return 0;
 }
 ```
+
+### Streaming response
+
+`handleRequest` takes an optional callback contract on top of the same request JSON: when one is given, the body is passed along chunk by chunk instead of accumulating in the basket, so the transfer costs one chunk-sized buffer whatever the size of the resource. Passing NULL keeps the buffered result — the library installs a collector of its own on the very same funnel, and `handleResponse` returns the whole body in `payload`. The contract itself is all or nothing: `onHeaders`, `onData` and `onComplete` must all be filled in, since a contract with a hole would leave the body with neither a consumer nor a place in the basket.
+
+```c
+typedef struct {
+    // Response headers (":status" first), delivered once, before the body.
+    void (*onHeaders)(void *userData, const ResponseHeader *headers, size_t numHeaders);
+    // One decoded body chunk; returning non-zero stops the response.
+    int  (*onData)(void *userData, const unsigned char *data, size_t len);
+    // Delivered once per attempt; `error` is ERR_NONE when the body ended cleanly.
+    void (*onComplete)(void *userData, Error error);
+    void *userData;
+} ResponseStream;
+
+const ResponseStream stream = { onHeaders, onData, onComplete, NULL };
+intptr_t handle = handleRequest(request, &stream);
+```
+
+| Aspect | Behaviour |
+|--------|-----------|
+| Thread | Callbacks run on the thread that receives the bytes — the HTTP/2 connection reader thread, or the thread driving the HTTP/1.1 exchange. They must stay short and must not call back into this library. |
+| Contract | All three callbacks or none: `handleRequest` refuses a partial contract with `3-0015` (`ERR_RESPONSE_STREAM_INCOMPLETE_CONTRACT`) before the request is sent, and `handleResponse` reports it like any other basket error. |
+| Decompression | `content-encoding` is decoded incrementally (gzip / deflate / Brotli / Zstd) within the `decompress` mask, so `onData` only ever sees plain bytes. |
+| Flow control | An HTTP/2 response returns flow-control credit as the consumer reads, batched per stream (16 KB granularity) and per connection (64 KB); the connection window auto-tunes from 64 KB up to 16 MB while the pipe sustains full-window flows, and every control frame earned in a read batch leaves in one coalesced write — like a browser. A dead stream (ended, reset or aborted) never gets a trailing update. A buffered response is read by the library's own collector, so it replenishes credit the same way. |
+| Abort | A non-zero `onData` return tears the response down — RST_STREAM for HTTP/2, connection close for HTTP/1.1 — and reports `3-0014` (`ERR_RESPONSE_STREAM_ABORTED_BY_CONSUMER`) to `onComplete`. |
+| Timeout | `responseReadingTimeoutInMilliseconds` becomes an **idle** timeout: every chunk that arrives pushes the deadline forward, so a long-lived transfer is not bounded by its total duration. |
+| Result | `handleResponse` still returns the basket, with the headers, `"streamed": 1` and an empty `payload`. |
+| Retry | A connection-level retry replays the whole callback sequence from scratch, so `onHeaders` / `onComplete` can run more than once. |
+
+A request that fails before any stream is registered reports the error through `handleResponse` only, without a callback.
+
+#### In the bindings
+
+Each binding hands the same contract to the library, and a call without callbacks stays buffered — a call with only some of them is rejected before the request goes out:
+
+| Binding | Streaming call | Notes |
+|---------|----------------|-------|
+| [Node.js](nodejs/) | `requestAsync(config, { onHeaders, onData, onComplete })`<br>`requestNonBlocking(config, pollIntervalMs, callbacks)` | Callbacks are posted to the JS thread, so a verdict cannot come back synchronously: `onData` returning `true` is honoured by the next chunk. A partial bundle throws. The synchronous `request()` blocks the event loop and cannot deliver callbacks. |
+| [Python](python/) | `httpClient.request(config, on_headers, on_data, on_complete)`<br>`httpClient.start_request(config, ...)` | `on_data` gets a `bytes` chunk and returns `True` to stop. A partial set raises `ValueError`. |
+| [Java](java/) | `HttpClient.request(json, listener)`<br>`HttpClient.startRequest(json, listener)`<br>`HttpClient.requestNonBlocking(json, pollIntervalMs, listener)` | A `ResponseListener` whose `onData(byte[])` returns `true` to stop; the JNI call is synchronous, so the response stops at once. Its three methods are abstract, so the compiler enforces the contract. |
+
+In all of them the callbacks run on the thread that receives the bytes, not on the calling thread.
 
 ## Request JSON Format
 
@@ -355,15 +407,19 @@ Optional transport override. Setting `"session": { "protocol": "http/1.1" }` for
 # C tests (from build directory)
 ./bin/test_GET
 ./bin/test_POST
+./bin/test_Streaming   # callback streaming, abort, incremental gzip decode
 
 # Node.js
 cd nodejs && npm install && npm test
+node test_streaming.js   # streaming callbacks, abort, incremental gzip decode
 
-# Python
-cd python && bash build.sh
+# Python (build.sh runs the basic test itself, from the project root)
+bash python/build.sh
+python3 python/test_streaming.py
 
-# Java
+# Java (build.sh runs the basic test itself)
 cd java && bash build.sh
+java --enable-native-access=ALL-UNNAMED -cp build/http-client-1.0.0.jar TestStreaming
 ```
 
 ## Troubleshooting

@@ -72,7 +72,7 @@ static void doRequest(const char *requestStr, Worker *w) {
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    const intptr_t handle = handleRequest(requestStr);
+    const intptr_t handle = handleRequest(requestStr, NULL);
     char *basketStr = NULL;
     if (handle != 0) {
         basketStr = collectResponse(handle, NULL);

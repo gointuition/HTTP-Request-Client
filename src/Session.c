@@ -20,6 +20,7 @@
 #include "SocketHandler.h"
 #include "SSLHandler.h"
 #include "BrowserHandler.h"
+#include "ResponseStream.h"
 #include "Log.h"
 
 // common file shared between task thread and daemon thread
@@ -249,6 +250,7 @@ int closeSession(Session *session, Error error) {
     pthread_mutex_destroy(&session -> writeMutex);
     pthread_mutex_destroy(&session -> streamsMutex);
 
+    free(session -> pendingWire);
     free(session);
 
     return 0;
@@ -728,6 +730,14 @@ static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * 
     session -> inflightCount = 0;
     session -> goingAway = 0;
     session -> connError = ERR_NONE;
+    session -> pendingConnWindow = 0;
+    session -> pendingStreamWindowCount = 0;
+    session -> connWindowFlushDue = 0;
+    session -> connWindowTarget = HTTP2_INITIAL_FLOW_CONTROL_WINDOW;
+    session -> connWindowSinceGrowth = 0;
+    session -> pendingWire = NULL;
+    session -> pendingWireSize = 0;
+    session -> pendingWireCapacity = 0;
     session -> readerRunning = 0;
     session -> readerStarted = 0;
     for (int i = 0; i < MAX_CONCURRENT_STREAMS_PER_SESSION; i++) {
@@ -786,9 +796,12 @@ Stream* registerStream(Basket *basket) {
     stream -> isEnded = 0;
     stream -> combinedPayload = NULL;
     stream -> combinedPayloadSize = 0;
+    stream -> lastActivityTime = time(NULL);
     stream -> error = ERR_NONE;
     pthread_mutex_init(&stream -> lock, NULL);
     pthread_cond_init(&stream -> cond, NULL);
+
+    stream -> sink = basket -> sink; // the response funnel: caller contract or library collector
 
     // Assign an odd client-initiated stream id (1, 3, 5, ...).
     unsigned int id = atomic_fetch_add(&session -> streamId, 2);
@@ -818,21 +831,17 @@ Stream* registerStream(Basket *basket) {
 }
 
 int awaitStream(Basket *basket, Stream *stream) {
+    const int timeoutInMilliseconds = basket -> responseReadingTimeoutInMilliseconds;
     struct timespec deadline;
-    clock_gettime(CLOCK_REALTIME, &deadline);
-    long ms = basket -> responseReadingTimeoutInMilliseconds;
-    deadline.tv_sec += ms / 1000;
-    deadline.tv_nsec += (ms % 1000) * 1000000L;
-    if (deadline.tv_nsec >= 1000000000L) {
-        deadline.tv_sec += 1;
-        deadline.tv_nsec -= 1000000000L;
-    }
+    buildResponseDeadline(&deadline, timeoutInMilliseconds);
 
     pthread_mutex_lock(&stream -> lock);
     int rc = 0;
     while (!stream -> isEnded) {
         rc = pthread_cond_timedwait(&stream -> cond, &stream -> lock, &deadline);
-        if (rc == ETIMEDOUT) { break; }
+        if (rc != ETIMEDOUT) { continue; }
+        const int renewed = renewStreamDeadline(stream, timeoutInMilliseconds, &deadline);
+        if (!renewed) { break; }
     }
     int ended = stream -> isEnded;
     int received = (stream -> numHeaders > 0 || stream -> combinedPayloadSize > 0);

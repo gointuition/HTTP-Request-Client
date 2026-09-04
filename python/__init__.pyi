@@ -3,7 +3,7 @@ Type stubs for the HTTP client Python binding.
 Mirrors nodejs/index.d.ts.
 """
 
-from typing import TypedDict, Optional, List, Union
+from typing import TypedDict, Optional, List, Union, Callable, Tuple
 
 
 class HttpRequestConfig(TypedDict, total=False):
@@ -54,9 +54,34 @@ class HttpResult(TypedDict, total=False):
     session: dict
 
 
+# Streaming callbacks: giving all three switches the request to streaming, so
+# response.payload stays empty and "streamed" is 1. Giving none keeps the
+# buffered response; giving only some raises ValueError, since a missing
+# on_data would leave the body with neither a consumer nor a place in the result.
+# on_headers: response headers as a dict, ":status" first, delivered once.
+# on_data: one decoded body chunk; return True to stop the response early.
+# on_complete: None when the body ended cleanly, otherwise the error dict.
+OnHeaders = Callable[[dict], None]
+OnData = Callable[[bytes], Optional[bool]]
+OnComplete = Callable[[Optional[HttpError]], None]
+
+
 class HttpClient:
     def init(self) -> "HttpClient": ...
-    def request(self, config: Union[HttpRequestConfig, str]) -> str: ...
+    def request(self, config: Union[HttpRequestConfig, str],
+                on_headers: Optional[OnHeaders] = None,
+                on_data: Optional[OnData] = None,
+                on_complete: Optional[OnComplete] = None) -> str: ...
+    def start_request(self, config: Union[HttpRequestConfig, str],
+                      on_headers: Optional[OnHeaders] = None,
+                      on_data: Optional[OnData] = None,
+                      on_complete: Optional[OnComplete] = None) -> int: ...
+    def poll_request(self, request_id: int) -> Tuple[int, Optional[str]]: ...
+    def request_non_blocking(self, config: Union[HttpRequestConfig, str],
+                             poll_interval_ms: int = 5,
+                             on_headers: Optional[OnHeaders] = None,
+                             on_data: Optional[OnData] = None,
+                             on_complete: Optional[OnComplete] = None) -> str: ...
     def cleanup(self) -> None: ...
 
 
