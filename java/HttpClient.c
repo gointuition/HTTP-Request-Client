@@ -113,11 +113,9 @@ static JNIEnv* attachCallbackThread(JniStreamContext *ctx, int *attachedHere) {
     if ((*ctx->jvm)->GetEnv(ctx->jvm, (void **)&env, JNI_VERSION_1_6) == JNI_OK) {
         return env;
     }
-#ifdef __APPLE__
+    /* jni.h declares this C entry point as taking void** on every platform, so
+     * the local JNIEnv* is always cast rather than passed through. */
     const jint attached = (*ctx->jvm)->AttachCurrentThread(ctx->jvm, (void **)&env, NULL);
-#else
-    const jint attached = (*ctx->jvm)->AttachCurrentThread(ctx->jvm, &env, NULL);
-#endif
     if (attached != JNI_OK) {
         return NULL;
     }

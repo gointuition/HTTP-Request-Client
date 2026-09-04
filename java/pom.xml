@@ -196,6 +196,9 @@
                                         <exec executable="gcc" failonerror="true">
                                             <arg value="-shared"/>
                                             <arg value="-fPIC"/>
+                                            <!-- the listener registry is guarded by a pthread mutex, so the
+                                                 bridge needs libpthread just like the C library does. -->
+                                            <arg value="-pthread"/>
                                             <arg value="-I${java.home}/include"/>
                                             <arg value="-I${java.home}/include/${jni.os.include}"/>
                                             <arg value="-I${project.basedir}"/>
