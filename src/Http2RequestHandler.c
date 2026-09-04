@@ -13,6 +13,7 @@
 
 #include "Compat.h"
 
+#include "Common.h"
 #include "SSLHandler.h"
 #include "Error.h"
 #include "BrowserHandler.h"
@@ -138,6 +139,11 @@ static size_t buildHeadersFrameBuffer(unsigned char *buffer, size_t bufferSize, 
                                       int includePriority);
 static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t bufferSize);
 
+static void logHttp2Request(Basket *basket);
+static char* buildHttp2RequestDebug(Basket *basket);
+static void appendHttp2DebugRequestLine(StrBuf *sb, Basket *basket);
+static void appendHttp2DebugHeaders(StrBuf *sb, Basket *basket);
+
 int establishTransport(Basket *basket, SSL *ssl) {
     // send HTTP/2 Preface frame
     if (sslWriteAll(basket, ssl, (const unsigned char *) HTTP2_PREFACE, strlen(HTTP2_PREFACE)) != 1) {
@@ -179,11 +185,67 @@ void sendHeadersFrame(Basket *basket) {
         return;
     }
 
+    logHttp2Request(basket);
+
     // logHex("Sending HEADERS frame:", headersFrame, headersFrameLen);
     if (sslWriteAll(basket, basket -> session -> ssl, headersFrame, headersFrameLen) != 1) {
         LOG("ERROR", "SSL_write http headers frame failed");
         basket -> error = ERR_REQUEST_SENDING_HTTP2_HEADERS_FRAME_FAILED;
         return;
+    }
+}
+
+// ─── request debug logging ───
+
+// Same format as the http/1.1 request log: request line plus each
+// HEADERS-frame header in wire order.
+static void logHttp2Request(Basket *basket) {
+    if (!getLogEnabled()) { return; }
+    char *request = buildHttp2RequestDebug(basket);
+    if (request == NULL) { return; } // debug aid only: never fail the request on log allocation
+    LOG("DEBUG", "http/2 request:\n%s", request);
+    free(request);
+}
+
+static char* buildHttp2RequestDebug(Basket *basket) {
+    StrBuf sb = { NULL, 0, 0, 0 };
+    appendHttp2DebugRequestLine(&sb, basket);
+    appendHttp2DebugHeaders(&sb, basket);
+    if (sb.failed) {
+        free(sb.data);
+        return NULL;
+    }
+    sb.data[sb.len] = '\0';
+    return sb.data;
+}
+
+// "GET /path HTTP/2", values taken from the :method / :path pseudo headers
+static void appendHttp2DebugRequestLine(StrBuf *sb, Basket *basket) {
+    const char *method = "";
+    const char *path = "";
+    for (size_t i = 0; i < basket -> request.numHeaders; i++) {
+        const RequestHeader *h = &basket -> request.headers[i];
+        if (!h -> isPseudo) { continue; }
+        if (strcasecmp(h -> name, ":method") == 0) { method = h -> value; }
+        if (strcasecmp(h -> name, ":path") == 0) { path = h -> value; }
+    }
+
+    char requestLine[4608];
+    const int lineLen = snprintf(requestLine, sizeof(requestLine), "%s %s HTTP/2\n", method, path);
+    sbAppend(sb, requestLine, (size_t) lineLen);
+}
+
+// Every header in wire order, pseudo headers included; "connection" is
+// dropped by the HPACK encoder.
+static void appendHttp2DebugHeaders(StrBuf *sb, Basket *basket) {
+    for (size_t i = 0; i < basket -> request.numHeaders; i++) {
+        const RequestHeader *h = &basket -> request.headers[i];
+        if (!h -> isPseudo && strcasecmp(h -> name, "connection") == 0) { continue; }
+
+        sbAppendStr(sb, h -> name);
+        sbAppendStr(sb, ": ");
+        sbAppendStr(sb, h -> value);
+        sbAppendStr(sb, "\n");
     }
 }
 
@@ -376,7 +438,6 @@ static int buildHttp2HeadersFrame(Basket *basket, unsigned char *buffer, size_t 
             strcasecmp(basket -> request.headers[i].name, "connection") == 0) {
             continue;
         }
-        LOG("DEBUG", "Request Header: %s: %s", basket -> request.headers[i].name, basket -> request.headers[i].value);
         if (basket -> request.headers[i].isPseudo) {
             hpackBufferPtr = hpackPseudoHeaders(basket, basket -> request.headers[i], hpackBufferPtr);
         } else {

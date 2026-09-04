@@ -22,16 +22,10 @@
 
 #include "Http2RequestHandler.h"
 #include "UrlParser.h"
+#include "Common.h"
 #include "Error.h"
 #include "ResponseStream.h"
 #include "Log.h"
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-    int failed;
-} StrBuf;
 
 typedef struct {
     Basket *basket;
@@ -56,10 +50,6 @@ static int sessionWriteAll(Session *session, int nonBlocking, int timeoutInMilli
 static int plainWriteAll(Session *session, int nonBlocking, int timeoutInMillis,
                          const unsigned char *buf, size_t len);
 static int isRetryableSocketError(int lastError);
-
-static void sbReserve(StrBuf *sb, size_t extra);
-static void sbAppend(StrBuf *sb, const char *s, size_t n);
-static void sbAppendStr(StrBuf *sb, const char *s);
 
 // ─── orchestrator ───
 
@@ -324,31 +314,4 @@ static int isRetryableSocketError(int lastError) {
 #else
     return lastError == WSAEINTR || lastError == WSAEWOULDBLOCK;
 #endif
-}
-
-// ─── string buffer ───
-
-static void sbReserve(StrBuf *sb, size_t extra) {
-    if (sb -> failed) { return; }
-    if (sb -> len + extra + 1 <= sb -> cap) { return; }
-    size_t newCap = sb -> cap ? sb -> cap : 1024;
-    while (newCap < sb -> len + extra + 1) { newCap *= 2; }
-    char *newData = realloc(sb -> data, newCap);
-    if (newData == NULL) {
-        sb -> failed = 1;
-        return;
-    }
-    sb -> data = newData;
-    sb -> cap = newCap;
-}
-
-static void sbAppend(StrBuf *sb, const char *s, size_t n) {
-    sbReserve(sb, n);
-    if (sb -> failed) { return; }
-    memcpy(sb -> data + sb -> len, s, n);
-    sb -> len += n;
-}
-
-static void sbAppendStr(StrBuf *sb, const char *s) {
-    sbAppend(sb, s, strlen(s));
 }

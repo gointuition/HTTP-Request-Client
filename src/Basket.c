@@ -612,6 +612,8 @@ static void reorderHeadersByOrderKey(Basket *basket) {
     }
 
     // Then the real headers, in the exact order given by X-HeaderOrderKey.
+    // Same-name headers (e.g. split cookies) all go here, keeping their
+    // relative order; taking only the first would silently drop the rest.
     for (size_t k = 0; k < keyCount; k++) {
         for (size_t i = 0; i < n; i++) {
             if (req -> headers[i].isPseudo || (int) i == orderIdx || matched[i]) {
@@ -620,7 +622,6 @@ static void reorderHeadersByOrderKey(Basket *basket) {
             if (headerNameEquals(req -> headers[i].name, keys[k])) {
                 ordered[out++] = req -> headers[i];
                 matched[i] = 1;
-                break;
             }
         }
     }
