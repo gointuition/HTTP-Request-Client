@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <unistd.h>
+
 #include "jansson.h"
 
 #include "File.h"
@@ -74,7 +76,16 @@ static char* collectResponse(intptr_t handle, int *outLen) {
         handleResponse(handle, dest, capacity, &status, &len);
     }
 
+    // "non-blocking": 0 finishes the exchange inside handleRequest(); any other
+    // value is polled, so poll until the request completes instead of giving up
+    // on the first call (status 0 == still in flight).
+    while (status == 0) {
+        sleep(1);
+        handleResponse(handle, dest, capacity, &status, &len);
+    }
+
     if (status != 1) {
+        LOG("ERROR", "handleResponse returned status %d", status);
         free(dest);
         return NULL;
     }
@@ -138,7 +149,6 @@ int main(int argc, char *argv[]) {
     free(requestStr);
 
     cleanupEnv();
-
     return ret;
 }
 

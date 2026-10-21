@@ -718,6 +718,8 @@ static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * 
 
     session -> protocol = protocol;
     session -> plainProxy = 0;
+    // Captured on this (requesting) thread so the reader thread can restore it.
+    session -> logEnabled = getLogEnabled() ? 1 : 0;
     // HPACK is HTTP/2-only; HTTP/1.1 sessions carry plain text headers.
     session -> hpackCtx = (protocol == HTTP_PROTOCOL_2) ? initHpackContext(basket) : NULL;
     session -> connInfo = connInfo; // ownership transferred from createSession
@@ -749,6 +751,9 @@ static Session* initSession(Basket *basket, int sockfd, SSL_CTX * sslCtx, SSL * 
     return session;
 }
 
+// RFC 7541 4.2 default when neither peer sends SETTINGS_HEADER_TABLE_SIZE.
+#define HPACK_DEFAULT_HEADER_TABLE_SIZE 4096
+
 static HpackContext *initHpackContext(Basket *basket) {
     HpackContext *ctx = malloc(sizeof(HpackContext));
     if (!ctx) {
@@ -760,7 +765,10 @@ static HpackContext *initHpackContext(Basket *basket) {
     ctx -> dynamicTable = NULL;
     ctx -> dynamicTableSize = 0;
     ctx -> dynamicTableCapacity = 0;
-    ctx -> dynamicTableMaxSize = 4096;
+
+    const BrowserFingerprint *fp = basket -> fingerprint;
+    size_t advertised = (fp != NULL) ? fp -> headerTableSize : 0;
+    ctx -> dynamicTableMaxSize = advertised > 0 ? advertised : HPACK_DEFAULT_HEADER_TABLE_SIZE;
 
     return ctx;
 }

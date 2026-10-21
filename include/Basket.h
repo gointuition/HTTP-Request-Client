@@ -131,7 +131,10 @@ typedef struct Stream {
     size_t              numHeaders;
     unsigned char       *combinedPayload;
     size_t              combinedPayloadSize;
-    int                 payloadDecoded; // the funnel already decoded the body (no one-shot pass)
+    unsigned char       *headerBlock;    // header block split across CONTINUATION frames
+    size_t              headerBlockSize;
+    int                 awaitingContinuation;
+    int                 payloadDecoded;  // the funnel already decoded the body (no one-shot pass)
     time_t              lastActivityTime; // last body chunk received (streaming idle timeout)
     Error               error;
     pthread_mutex_t     lock;
@@ -175,6 +178,7 @@ typedef struct {
     pthread_t           reader;         // per-connection frame reader thread
     volatile int        readerRunning;  // reader loop control flag
     int                 readerStarted;  // whether pthread_create succeeded (join guard)
+    int                 logEnabled;
     volatile int        goingAway;      // set on GOAWAY / connection loss; blocks reuse
     Error               connError;      // connection-level error (GOAWAY reason), applied to streams
     uint32_t            pendingConnWindow; // connection-scope flow credit owed (reader thread only)

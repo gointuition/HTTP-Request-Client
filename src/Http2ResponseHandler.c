@@ -137,8 +137,12 @@ static Stream* findStream(Session *session, uint32_t streamId);
 static void handleDataFrame(Stream *stream, unsigned char *payload, uint32_t length);
 static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t length, uint8_t flags, HpackContext *ctx);
 static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t length, HpackContext *ctx);
+static int appendHeaderBlockFragment(Stream *stream, const unsigned char *payload, size_t length);
 // static HpackContext *initHpackContext(Basket *basket);
 static void getHeaderFromTable(size_t index, char **name, char **value, HpackContext *ctx);
+static size_t hpackEntrySize(const char *name, const char *value);
+static size_t hpackDynamicTableUsedSize(HpackContext *ctx);
+static void hpackEvictFromTail(HpackContext *ctx);
 static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *name, const char *value);
 static void freeResponseHeader(ResponseHeader *header);
 static void handleRST_STREAMFrame(Session *session, Stream *stream, unsigned char *payload, uint32_t length, uint32_t streamId);
@@ -152,6 +156,9 @@ static const char* getErrorName(uint32_t code);
 
 void* readerLoop(void *arg) {
     Session *session = (Session *) arg;
+
+    setLogEnabled(session -> logEnabled);
+
     SSL *ssl = session -> ssl;
     int fd = SSL_get_fd(ssl);
 
@@ -285,8 +292,12 @@ void stopReader(Session *session) {
 // shared HPACK context is touched by a single thread in wire-arrival order.
 static void readerDispatch(Session *session, unsigned char *payload, uint32_t length,
                            uint8_t type, uint8_t flags, uint32_t streamId) {
-    // DATA(0x0) / HEADERS(0x1) / RST_STREAM(0x3) are stream-scoped.
-    if (type == 0x0 || type == 0x1 || type == 0x3) {
+    // DATA(0x0) / HEADERS(0x1) / RST_STREAM(0x3) are stream-scoped, plus
+    // CONTINUATION(0x9): it carries the rest of the header block opened by a
+    // HEADERS frame on the *same* stream, so it must be dispatched to that
+    // stream. Treating it as connection-level (stream == NULL) would drop the
+    // fragment, leaving the HPACK dynamic table out of sync with the encoder.
+    if (type == 0x0 || type == 0x1 || type == 0x3 || type == 0x9) {
         pthread_mutex_lock(&session -> streamsMutex);
         Stream *stream = findStream(session, streamId);
         if (stream != NULL) {
@@ -473,6 +484,28 @@ void handleStreamFrame(Session *session, Stream *stream,
             }
             break;
         }
+        case 0x9: { // CONTINUATION
+            // Header block fragments after the first HEADERS frame. The block is
+            // only complete (and decodable) once END_HEADERS is set.
+            if (stream == NULL || !stream -> awaitingContinuation) {
+                // Unexpected: no HEADERS left a block open on this stream.
+                LOG("WARN", "CONTINUATION for stream %u without an open header block", streamId);
+                break;
+            }
+            if (appendHeaderBlockFragment(stream, payload, length) != 0) {
+                stream -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+                stream -> awaitingContinuation = 0;
+                break;
+            }
+            if (flags & 0x4) { // END_HEADERS
+                stream -> awaitingContinuation = 0;
+                if (stream -> error.code == NULL) {
+                    decodeHeadersFrame(stream, stream -> headerBlock, stream -> headerBlockSize, session -> hpackCtx);
+                }
+                stream -> headerBlockSize = 0;
+            }
+            break;
+        }
         case 0x3: // RST_STREAM
             if (stream) {
                 handleRST_STREAMFrame(session, stream, payload, length, streamId);
@@ -494,13 +527,17 @@ void handleStreamFrame(Session *session, Stream *stream,
     }
 
     // END_HEADERS: the response headers are complete, a streaming consumer
-    // gets them before any body byte.
-    if (stream && type == 0x1 && (flags & 0x4)) {
+    // gets them before any body byte. A split header block terminates on the
+    // CONTINUATION frame carrying END_HEADERS, not on the initial HEADERS.
+    if (stream && (type == 0x1 || type == 0x9) && (flags & 0x4)
+        && stream -> error.code == NULL) {
         deliverResponseHeaders(stream);
     }
 
-    // END_STREAM flag on DATA/HEADERS completes the stream.
-    if (stream && (type == 0x0 || type == 0x1) && (flags & 0x1)) {
+    // END_STREAM flag on DATA/HEADERS/CONTINUATION completes the stream. A
+    // split header block carries END_HEADERS (and may carry END_STREAM) on the
+    // terminating CONTINUATION frame, not on the initial HEADERS frame.
+    if (stream && (type == 0x0 || type == 0x1 || type == 0x9) && (flags & 0x1)) {
         stream -> isEnded = 1;
         LOG("DEBUG", "Stream %u ended.", streamId);
     }
@@ -566,6 +603,7 @@ static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t 
     size_t padLength = 0;
     if (flags & 0x08) {
         if (payloadSize < 1) {
+            LOG("ERROR", "Response HEADERS frame: PADDED flag set but payload empty (len %u)", length);
             stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
             return;
         }
@@ -577,6 +615,7 @@ static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t 
     // Skip Priority if present (0x20)
     if (flags & 0x20) {
         if (payloadSize < 5) {
+            LOG("ERROR", "Response HEADERS frame: PRIORITY flag set but payload too small (%zu)", payloadSize);
             stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
             return;
         }
@@ -587,25 +626,52 @@ static void handleHeadersFrame(Stream *stream, unsigned char *payload, uint32_t 
     // Remove padding from the end
     if (padLength > 0) {
         if (padLength > payloadSize) {
+            LOG("ERROR", "Response HEADERS frame: pad length %zu exceeds payload %zu", padLength, payloadSize);
             stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
             return;
         }
         payloadSize -= padLength;
     }
 
+    // A header block that does not fit in one frame is continued in
+    // CONTINUATION frames (RFC 9113 4.3). Decoding a fragment would land in the
+    // middle of a header field, so buffer it until END_HEADERS arrives.
+    if ((flags & 0x4) == 0) {
+        stream -> headerBlockSize = 0;
+        if (appendHeaderBlockFragment(stream, payloadStart, payloadSize) != 0) {
+            stream -> error = ERR_SYSTEM_MEMORY_ALLOCATION_FAILED;
+            return;
+        }
+        stream -> awaitingContinuation = 1;
+        LOG("DEBUG", "Response HEADERS frame: header block continues (%zu bytes buffered)", stream -> headerBlockSize);
+        return;
+    }
+
     // Call the existing decoder logic, passing ctx
     decodeHeadersFrame(stream, payloadStart, payloadSize, ctx);
+}
+
+// Append a header block fragment to the stream's pending block buffer.
+// Returns 0 on success, -1 on allocation failure.
+static int appendHeaderBlockFragment(Stream *stream, const unsigned char *payload, size_t length) {
+    if (length == 0) {
+        return 0;
+    }
+    unsigned char *grown = realloc(stream -> headerBlock, stream -> headerBlockSize + length);
+    if (grown == NULL) {
+        LOG("ERROR", "Response HEADERS frame: header block buffer realloc failed");
+        return -1;
+    }
+    stream -> headerBlock = grown;
+    memcpy(stream -> headerBlock + stream -> headerBlockSize, payload, length);
+    stream -> headerBlockSize += length;
+    return 0;
 }
 
 static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t length, HpackContext *ctx) {
     if (!payload || length == 0) { return; }
 
-    LOG("DEBUG", "Response HEADERS frame: raw payload (%zu bytes): ", length);
-//    for (size_t i = 0; i < length && i < 32; i++) {
-//        printf("%02x ", payload[i]);
-//    }
-//    if (length < 32) { printf("..."); }
-//    printf("");
+    LOG("DEBUG", "Response HEADERS frame: header block (%zu bytes)", length);
 
     stream -> numHeaders = 0;
     size_t pos = 0;
@@ -624,9 +690,14 @@ static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t le
         uint8_t firstByte = payload[pos];
         // check if dynamic table size updates
         if ((firstByte & 0xE0) == 0x20) {
-            // dynamic table size updates
+            // dynamic table size update
+            // RFC 7541 6.3: the new maximum replaces the capacity, and shrinking it
+            // immediately evicts entries from the tail until the table fits.
             size_t maxSize = hpackDecodeInteger(payload, &pos, 5, length);
             ctx -> dynamicTableMaxSize = maxSize;
+            while (ctx -> dynamicTableSize > 0 && hpackDynamicTableUsedSize(ctx) > ctx -> dynamicTableMaxSize) {
+                hpackEvictFromTail(ctx);
+            }
             LOG("DEBUG", "Response HEADERS frame: dynamic table size update %zu", maxSize);
             continue;
         }
@@ -655,8 +726,8 @@ static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t le
             if (index >= staticTableCount) {
                 size_t dynamicIndex = index - (staticTableCount - 1) - 1;
                 if (dynamicIndex >= ctx -> dynamicTableSize) {
-                    LOG("ERROR", "Response HEADERS frame: dynamic table index %zu out of range (table size %zu)",
-                        dynamicIndex, ctx -> dynamicTableSize);
+                    LOG("ERROR", "Response HEADERS frame: dynamic table index %zu out of range (index %zu, entries %zu, capacity %zu)",
+                        dynamicIndex, index, ctx -> dynamicTableSize, ctx -> dynamicTableMaxSize);
                     stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                     continue;
                 }
@@ -689,7 +760,7 @@ static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t le
                 // literal name
                 resHeader.name = hpackDecodeString(payload, &pos, length);
                 if (!resHeader.name) {
-                    LOG("ERROR", "Failed to decode header name");
+                    LOG("ERROR", "Response HEADERS frame: failed to decode header name");
                     stream -> error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                     isError = 1;
                     break;
@@ -699,7 +770,7 @@ static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t le
             // decode value (always literal for this type)
             resHeader.value = hpackDecodeString(payload, &pos, length);
             if (!resHeader.value) {
-                LOG("ERROR", "Failed to decode header value");
+                LOG("ERROR", "Response HEADERS frame: failed to decode header value");
                 freeResponseHeader(&resHeader);
                 stream->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                 break;
@@ -744,7 +815,7 @@ static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t le
                 // literal name
                 resHeader.name = hpackDecodeString(payload, &pos, length);
                 if (!resHeader.name) {
-                    LOG("ERROR", "Failed to decode header name");
+                    LOG("ERROR", "Response HEADERS frame: failed to decode header name");
                     stream->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                     break;
                 }
@@ -753,16 +824,19 @@ static void decodeHeadersFrame(Stream *stream, unsigned char *payload, size_t le
             // literal value
             resHeader.value = hpackDecodeString(payload, &pos, length);
             if (!resHeader.value) {
-                LOG("ERROR", "Failed to decode header value");
+                LOG("ERROR", "Response HEADERS frame: failed to decode header value");
                 freeResponseHeader(&resHeader);
                 stream->error = ERR_RESPONSE_DECODING_HEADERS_FRAME_FAILED;
                 break;
             }
 
-            // never add to dynamic table if never-index flag is set
-            if (!neverIndex) {
-                shouldAddToDynamicTable = 1;
-            }
+            // RFC 7541 6.2: only "Literal Header Field with Incremental Indexing"
+            // (0x40) inserts into the dynamic table. Both "without Indexing"
+            // (6.2.2) and "Never Indexed" (6.2.3) leave the encoder's table
+            // untouched, so the decoder must not insert either -- inserting them
+            // desynchronises the tables and shifts every later indexed reference.
+            (void)neverIndex;
+            shouldAddToDynamicTable = 0;
 
             // TODO handle special headers with binary data
             int isBinaryHeader = resHeader.name && (strcasecmp(resHeader.name, "content-security-policy") == 0
@@ -850,18 +924,50 @@ static void getHeaderFromTable(size_t index, char **name, char **value, HpackCon
     }
 }
 
-static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *name, const char *value) {
-    size_t entrySize = strlen(name) + strlen(value) + 32; // 32 HPack overhead
+static size_t hpackEntrySize(const char *name, const char *value) {
+    // 32 bytes of per-entry overhead (RFC 7541 4.1)
+    return strlen(name) + strlen(value) + 32;
+}
 
-    // remove oldest entry
-    while (ctx -> dynamicTableSize > 0 && ctx -> dynamicTableMaxSize < entrySize) {
+// Bytes currently held by the entries of the dynamic table.
+static size_t hpackDynamicTableUsedSize(HpackContext *ctx) {
+    size_t used = 0;
+    for (size_t i = 0; i < ctx -> dynamicTableSize; i++) {
+        used += hpackEntrySize(ctx -> dynamicTable[i].name, ctx -> dynamicTable[i].value);
+    }
+    return used;
+}
+
+static void hpackEvictFromTail(HpackContext *ctx) {
+    if (ctx -> dynamicTableSize == 0) {
+        return;
+    }
+    const size_t lastIndex = ctx -> dynamicTableSize - 1;
+    free(ctx -> dynamicTable[lastIndex].name);
+    free(ctx -> dynamicTable[lastIndex].value);
+    ctx -> dynamicTableSize--;
+}
+
+static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *name, const char *value) {
+    const size_t entrySize = hpackEntrySize(name, value);
+
+    // An entry larger than the whole table empties it and is not stored
+    // (RFC 7541 4.4), it still must be evicted from the tail in order.
+    if (entrySize > ctx -> dynamicTableMaxSize) {
+        while (ctx -> dynamicTableSize > 0) {
+            hpackEvictFromTail(ctx);
+        }
+        return;
+    }
+
+    // Evict oldest entries until the new one fits. dynamicTableMaxSize is the
+    // table capacity (never mutated here), so the loop terminates once enough
+    // room was freed.
+    size_t used = hpackDynamicTableUsedSize(ctx);
+    while (ctx -> dynamicTableSize > 0 && used + entrySize > ctx -> dynamicTableMaxSize) {
         const size_t lastIndex = ctx -> dynamicTableSize - 1;
-        const size_t removedSize = strlen(ctx -> dynamicTable[lastIndex].name)
-                                   + strlen(ctx -> dynamicTable[lastIndex].value) + 32;
-        free(ctx -> dynamicTable[lastIndex].name);
-        free(ctx -> dynamicTable[lastIndex].value);
-        ctx -> dynamicTableSize --;
-        ctx -> dynamicTableMaxSize += removedSize;
+        used -= hpackEntrySize(ctx -> dynamicTable[lastIndex].name, ctx -> dynamicTable[lastIndex].value);
+        hpackEvictFromTail(ctx);
     }
 
     // resize
@@ -884,7 +990,6 @@ static void addToDynamicTable(Stream *stream, HpackContext *ctx, const char *nam
     ctx -> dynamicTable[0].name = strdup(name);
     ctx -> dynamicTable[0].value = strdup(value);
     ctx -> dynamicTableSize++;
-    ctx -> dynamicTableMaxSize -= entrySize;
 }
 
 static void freeResponseHeader(ResponseHeader *header) {
@@ -1170,5 +1275,11 @@ void freeStreamBuffers(Stream *stream) {
         free(stream -> combinedPayload);
         stream -> combinedPayload = NULL;
         stream -> combinedPayloadSize = 0;
+    }
+    if (stream -> headerBlock) {
+        free(stream -> headerBlock);
+        stream -> headerBlock = NULL;
+        stream -> headerBlockSize = 0;
+        stream -> awaitingContinuation = 0;
     }
 }

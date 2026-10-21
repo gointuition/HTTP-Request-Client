@@ -41,6 +41,7 @@ typedef struct {
     const unsigned char *windowUpdateFrame;
     size_t windowUpdateFrameLen;
     int headerValueMaxLength;
+    size_t headerTableSize;
 
     // TLS (ClientHello) fingerprint
     const unsigned char *alpn;

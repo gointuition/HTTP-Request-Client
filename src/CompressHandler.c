@@ -404,7 +404,7 @@ DecompressedObj* decompress_GZip(unsigned char *combinedPayload, size_t combined
     size_t realSize = zs.next_out - decompressed;
     decompressed[realSize] = '\0';
 
-    LOG("ERROR", "(Gzip) Decompressed content (%zu bytes): \n", realSize);
+    LOG("DEBUG", "(Gzip) Decompressed content (%zu bytes): \n", realSize);
 
     decompressedObj -> decompressedPayload = decompressed;
     decompressedObj -> decompressedPayloadSize = realSize;
