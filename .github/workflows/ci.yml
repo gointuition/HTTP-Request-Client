@@ -1170,7 +1170,20 @@ jobs:
             exit 1
           fi
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$HOME/.npmrc"
-          ( cd "$node_pkg" && npm publish --access public --ignore-scripts )
+          # npm answers a PUT with a misleading "E404 Not Found" when the token
+          # is expired/revoked or cannot write to the package, so authenticate
+          # explicitly first to turn that into an actionable CI failure.
+          echo "npm $(npm --version)"
+          if ! npm_who="$( cd "$node_pkg" && npm whoami 2>&1 )"; then
+            echo "::error:: NPM_TOKEN could not authenticate (expired, revoked or scoped too narrowly). Rotate it at npmjs.com > Access Tokens and update the NPM_TOKEN repository secret."
+            echo "$npm_who"
+            exit 1
+          fi
+          echo "Publishing as npm user: $npm_who"
+          if ! ( cd "$node_pkg" && npm publish --access public --ignore-scripts ); then
+            echo "::error:: npm publish failed. An E404 on PUT means the token cannot write to @gointuition/http-client (wrong account, read-only / stage-only / package-restricted granular token, or missing write scope), NOT that the package is absent."
+            exit 1
+          fi
           echo "Published @gointuition/http-client to npm registry"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
