@@ -868,7 +868,12 @@ static int feedBrotli(StreamDecompressor *decompressor, const unsigned char *dat
     const uint8_t *nextIn = data;
     size_t availableIn = len;
 
-    while (availableIn > 0) {
+    // The loop runs while input remains OR the decoder still holds pending
+    // output: NEEDS_MORE_OUTPUT with the input already drained is legal at a
+    // chunk boundary, and exiting there would silently drop the decompressed
+    // tail (observed as bodies truncated at multiples of the 32 KiB buffer).
+    int keepGoing = 1;
+    while (keepGoing) {
         uint8_t *nextOut = decompressor -> out;
         size_t availableOut = STREAM_DECOMPRESS_CHUNK;
 
@@ -884,8 +889,13 @@ static int feedBrotli(StreamDecompressor *decompressor, const unsigned char *dat
             return -1;
         }
         if (result == BROTLI_DECODER_RESULT_SUCCESS) { return 1; }
-        const int stalled = produced == 0;
-        if (stalled) { return -1; }
+
+        // NEEDS_MORE_INPUT with nothing produced is a legal state (the decoder
+        // consumed the whole chunk and awaits more bits to emit anything), not
+        // a stall: stop and let the next body chunk continue the stream.
+        // NEEDS_MORE_OUTPUT: flush again with a fresh output buffer, whether or
+        // not input bytes remain.
+        keepGoing = availableIn > 0 || result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT;
     }
     return 1;
 }
