@@ -38,7 +38,7 @@ On Windows the project uses a **split toolchain**:
 
 **Requirements:**
 
-- [MSYS2](https://www.msys2.org/) with MINGW64 toolchain (`pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-tools-git`)
+- [MSYS2](https://www.msys2.org/) with MINGW64 toolchain (`pacman -S mingw-w64-x86_64-toolchain mingw-w64-ucrt-x86_64-tools`). `gendef` is no longer built for MINGW64 (MSYS2 dropped it in October 2026), so it comes from the UCRT64 tools package; add `C:\msys64\ucrt64\bin` to `PATH` so the addon build can find it.
 - Visual Studio 2022 with "Desktop development with C++" workload
 - NASM, Go (for BoringSSL)
 - Node.js >= 14, CMake >= 3.29

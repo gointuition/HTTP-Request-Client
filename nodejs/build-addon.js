@@ -75,7 +75,7 @@ if (process.platform === 'win32') {
     const gendef = spawnSync('gendef', [dll], { cwd: libDir, stdio: 'inherit', env })
     if (gendef.error || gendef.status !== 0) {
       console.error('build-addon: gendef failed. Make sure gendef is on PATH ' +
-        '(pacman -S mingw-w64-x86_64-tools-git).')
+        '(pacman -S mingw-w64-ucrt-x86_64-tools).')
       process.exit(1)
     }
 

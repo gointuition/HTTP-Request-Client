@@ -569,7 +569,7 @@ jobs:
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-ccache
             mingw-w64-x86_64-python-pip
-            mingw-w64-x86_64-tools-git
+            mingw-w64-ucrt-x86_64-tools
             unzip
             git
 
@@ -766,9 +766,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Prepend MSYS2 mingw64\bin so gendef (from mingw-w64-x86_64-tools-git)
-          # is discoverable; keep the rest of PATH (SystemFiles, VS, ...) intact.
-          $env:PATH = "${{ steps.msys2_setup.outputs.msys2-location }}\mingw64\bin;" + $env:PATH
+          # gendef stopped shipping for MINGW64 (MSYS2 dropped that build on
+          # 2026-10-23), so it comes from the UCRT64 tools package and lives in
+          # ucrt64\bin. Keep mingw64\bin first so cc/gcc still resolve to the
+          # toolchain that built libhttpclient.dll; keep the rest of PATH intact.
+          $env:PATH = "${{ steps.msys2_setup.outputs.msys2-location }}\mingw64\bin;${{ steps.msys2_setup.outputs.msys2-location }}\ucrt64\bin;" + $env:PATH
           Set-Location "${{ github.workspace }}\nodejs"
           # Verify gendef is reachable (the import-lib step needs it).
           where.exe gendef
